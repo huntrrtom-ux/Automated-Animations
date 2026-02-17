@@ -258,3 +258,10 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 /* Preset Tags */
 .preset-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
 .preset-tag { font-size: 0.62rem; padding: 0.1rem 0.45rem; border-radius: 3px; background: rgba(91,155,213,0.15); color: var(--accent); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Preset Drag & Drop */
+.preset-item { cursor: grab; transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s; }
+.preset-item:active { cursor: grabbing; }
+.preset-item.dragging { opacity: 0.4; transform: scale(0.97); }
+.preset-item.drag-over { box-shadow: 0 -2px 0 0 var(--accent); }
+.preset-drag-handle { display: flex; align-items: center; color: var(--text-muted); margin-right: 0.4rem; flex-shrink: 0; font-size: 0.9rem; letter-spacing: -1px; cursor: grab; }

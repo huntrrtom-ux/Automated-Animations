@@ -323,8 +323,11 @@ document.addEventListener('DOMContentLoaded', () => {
             presets.forEach(p => {
                 const item = document.createElement('div');
                 item.className = 'preset-item';
+                item.draggable = true;
+                item.dataset.presetId = p.id;
                 const isActive = p.id === activePresetId;
                 item.innerHTML = `
+                    <div class="preset-drag-handle">⠿</div>
                     <div class="preset-thumbs">
                         <img class="preset-thumb" src="/api/presets/${p.id}/style.png" alt="Style">
                         ${p.has_subject ? `<img class="preset-thumb" src="/api/presets/${p.id}/subject.png" alt="Subject">` : `<div class="preset-thumb-empty">—</div>`}
@@ -340,6 +343,47 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 `;
                 presetGallery.appendChild(item);
+            });
+
+            // Drag and drop reorder
+            let dragItem = null;
+            presetGallery.querySelectorAll('.preset-item').forEach(item => {
+                item.addEventListener('dragstart', (e) => {
+                    dragItem = item;
+                    item.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+                item.addEventListener('dragend', () => {
+                    item.classList.remove('dragging');
+                    presetGallery.querySelectorAll('.preset-item').forEach(el => el.classList.remove('drag-over'));
+                    // Save new order
+                    const order = [...presetGallery.querySelectorAll('.preset-item')].map(el => el.dataset.presetId);
+                    fetch('/api/presets/reorder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order })
+                    });
+                    dragItem = null;
+                });
+                item.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (item === dragItem) return;
+                    item.classList.add('drag-over');
+                });
+                item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+                item.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    item.classList.remove('drag-over');
+                    if (item === dragItem || !dragItem) return;
+                    const items = [...presetGallery.querySelectorAll('.preset-item')];
+                    const fromIdx = items.indexOf(dragItem);
+                    const toIdx = items.indexOf(item);
+                    if (fromIdx < toIdx) {
+                        item.after(dragItem);
+                    } else {
+                        item.before(dragItem);
+                    }
+                });
             });
             presetGallery.querySelectorAll('.preset-use-btn').forEach(btn => {
                 btn.addEventListener('click', () => { setActivePreset(btn.dataset.id, btn.dataset.name); loadPresets(); });

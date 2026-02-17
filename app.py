@@ -51,16 +51,42 @@ def emit_progress(session_id, step, progress, message, data=None):
 
 
 # ===================== PRESET MANAGEMENT =====================
+def get_preset_order():
+    order_path = os.path.join(app.config['PRESET_FOLDER'], '_order.json')
+    if os.path.exists(order_path):
+        try:
+            with open(order_path, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return []
+
+def save_preset_order(order):
+    order_path = os.path.join(app.config['PRESET_FOLDER'], '_order.json')
+    with open(order_path, 'w') as f:
+        json.dump(order, f)
+
 def get_all_presets():
     presets = []
     preset_dir = app.config['PRESET_FOLDER']
-    for name in sorted(os.listdir(preset_dir)):
+    preset_map = {}
+    for name in os.listdir(preset_dir):
+        if name.startswith('_'):
+            continue
         config_path = os.path.join(preset_dir, name, 'config.json')
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 config = json.load(f)
             config['id'] = name
-            presets.append(config)
+            preset_map[name] = config
+    # Sort by saved order, then append any new ones
+    order = get_preset_order()
+    for pid in order:
+        if pid in preset_map:
+            presets.append(preset_map.pop(pid))
+    # Append remaining (new presets not yet in order)
+    for pid in sorted(preset_map.keys()):
+        presets.append(preset_map[pid])
     return presets
 
 def get_preset(preset_id):
@@ -1118,6 +1144,14 @@ def create_preset():
 @app.route('/api/presets/<preset_id>', methods=['DELETE'])
 def remove_preset(preset_id):
     return jsonify({'message': 'Deleted'}) if delete_preset(preset_id) else (jsonify({'error': 'Not found'}), 404)
+
+@app.route('/api/presets/reorder', methods=['POST'])
+def reorder_presets():
+    order = request.json.get('order', [])
+    if not isinstance(order, list):
+        return jsonify({'error': 'Invalid order'}), 400
+    save_preset_order(order)
+    return jsonify({'ok': True})
 
 @app.route('/api/presets/<preset_id>/style.png')
 def preset_style_image(preset_id):
