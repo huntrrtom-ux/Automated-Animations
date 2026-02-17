@@ -148,6 +148,15 @@ document.addEventListener('DOMContentLoaded', () => {
         progressBar.style.width = `${progress}%`;
         progressText.textContent = `${progress}%`;
 
+        // Update spinner ring and percentage
+        const spinnerPct = document.getElementById('spinner-pct');
+        const spinnerFill = document.querySelector('.spinner-fill');
+        if (spinnerPct) spinnerPct.textContent = `${progress}%`;
+        if (spinnerFill) {
+            const circumference = 125.6; // 2 * PI * 20
+            spinnerFill.style.strokeDashoffset = circumference - (circumference * progress / 100);
+        }
+
         const stepOrder = ['transcription', 'scene_detection', 'generation', 'compositing'];
         const idx = stepOrder.indexOf(step);
 

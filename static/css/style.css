@@ -130,13 +130,13 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .progress-meta { display: flex; justify-content: flex-end; margin-top: 0.4rem; }
 .progress-text { font-size: 0.75rem; font-weight: 600; color: var(--accent); font-family: var(--font-display); }
 
-/* Circular Spinner */
+/* Circular Spinner with Percentage */
 .spinner-wrap { display: flex; justify-content: center; margin-top: 1.5rem; }
-.spinner { width: 44px; height: 44px; }
-.spinner svg { width: 100%; height: 100%; animation: spin 1.2s linear infinite; }
-.spinner circle { stroke: var(--accent); stroke-dasharray: 90, 150; stroke-dashoffset: 0; stroke-linecap: round; animation: dash 1.5s ease-in-out infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes dash { 0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; } 50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; } 100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; } }
+.spinner { width: 64px; height: 64px; position: relative; }
+.spinner svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.spinner-track { stroke: var(--border); }
+.spinner-fill { stroke: var(--accent); stroke-dasharray: 125.6; stroke-dashoffset: 125.6; stroke-linecap: round; transition: stroke-dashoffset 0.5s ease; }
+.spinner-pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 0.9rem; font-weight: 700; color: var(--accent); }
 
 /* Result */
 .result-card { padding: 2rem 1.75rem; }

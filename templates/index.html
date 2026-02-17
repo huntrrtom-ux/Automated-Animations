@@ -132,10 +132,14 @@
                         <span class="progress-text" id="progress-text">0%</span>
                     </div>
 
-                    <!-- Circular spinner replaces stick figure -->
+                    <!-- Circular spinner with percentage -->
                     <div class="spinner-wrap">
                         <div class="spinner">
-                            <svg viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke-width="3"/></svg>
+                            <svg viewBox="0 0 50 50">
+                                <circle class="spinner-track" cx="25" cy="25" r="20" fill="none" stroke-width="3"/>
+                                <circle class="spinner-fill" cx="25" cy="25" r="20" fill="none" stroke-width="3"/>
+                            </svg>
+                            <span class="spinner-pct" id="spinner-pct">0%</span>
                         </div>
                     </div>
                 </div>

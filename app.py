@@ -678,8 +678,8 @@ def create_video_from_image(image_path, video_path, duration):
         logger.error(f"Video from image failed: {e}")
 
 
-def compose_final_video_with_crossfade(scene_videos, audio_path, output_path, session_id, audio_duration=None, crossfade_duration=0.4):
-    emit_progress(session_id, 'compositing', 5, 'Compositing with crossfades...')
+def compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=None):
+    emit_progress(session_id, 'compositing', 5, 'Compositing video...')
     if len(scene_videos) < 2:
         if scene_videos:
             cmd = ['ffmpeg', '-y', '-i', scene_videos[0], '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
@@ -690,6 +690,7 @@ def compose_final_video_with_crossfade(scene_videos, audio_path, output_path, se
     work_dir = os.path.dirname(output_path)
 
     # Normalize all clips to 1920x1080 @ 25fps
+    emit_progress(session_id, 'compositing', 10, 'Normalizing clips to 1080p...')
     normalized_clips = []
     for i, clip in enumerate(scene_videos):
         norm_path = os.path.join(work_dir, f'norm_{i:04d}.mp4')
@@ -704,76 +705,21 @@ def compose_final_video_with_crossfade(scene_videos, audio_path, output_path, se
             logger.warning(f"Normalize failed for clip {i}, using original: {e}")
             normalized_clips.append(clip)
 
-    BATCH_SIZE = 10
-    current_clips = list(normalized_clips)
-    batch_round = 0
+    # Concat all clips
+    emit_progress(session_id, 'compositing', 50, 'Joining scenes...')
+    concat_file = os.path.join(work_dir, 'concat_list.txt')
+    with open(concat_file, 'w') as f:
+        for clip in normalized_clips:
+            f.write(f"file '{clip}'\n")
 
-    while len(current_clips) > 1:
-        batch_round += 1
-        next_clips = []
-        for batch_start in range(0, len(current_clips), BATCH_SIZE):
-            batch = current_clips[batch_start:batch_start + BATCH_SIZE]
-            if len(batch) == 1:
-                next_clips.append(batch[0])
-                continue
-
-            batch_output = os.path.join(work_dir, f'batch_r{batch_round}_{batch_start}.mp4')
-            inputs = []
-            for clip in batch:
-                inputs.extend(['-i', clip])
-
-            durations = []
-            for clip in batch:
-                try:
-                    durations.append(max(get_audio_duration(clip), 0.5))
-                except:
-                    durations.append(3.0)
-
-            n = len(batch)
-            xf_dur = min(crossfade_duration, min(durations) * 0.3)
-            xf_dur = max(0.15, xf_dur)
-
-            # dissolve transition — smooth crossfade, never fade-to-black
-            filter_parts = []
-            cumulative_offset = 0
-            prev_label = "[0:v]"
-            for j in range(1, n):
-                cumulative_offset += max(0.1, durations[j-1] - xf_dur)
-                out_label = f"[xf{j}]" if j < n-1 else "[out]"
-                fmt = "" if j < n-1 else ",format=yuv420p"
-                filter_parts.append(
-                    f"{prev_label}[{j}:v]xfade=transition=dissolve:duration={xf_dur:.3f}:offset={cumulative_offset:.3f}{fmt}{out_label}"
-                )
-                prev_label = out_label
-
-            filter_str = ";".join(filter_parts)
-            cmd = ['ffmpeg', '-y'] + inputs + [
-                '-filter_complex', filter_str, '-map', '[out]',
-                '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-pix_fmt', 'yuv420p', '-r', '25', '-threads', '2',
-                batch_output
-            ]
-            try:
-                subprocess.run(cmd, check=True, capture_output=True, timeout=600)
-                next_clips.append(batch_output)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Crossfade batch failed: {str(e.stderr)[:300] if e.stderr else str(e)[:200]}")
-                concat_path = os.path.join(work_dir, f'concat_r{batch_round}_{batch_start}.txt')
-                with open(concat_path, 'w') as f:
-                    for clip in batch:
-                        f.write(f"file '{clip}'\n")
-                fallback = os.path.join(work_dir, f'fallback_r{batch_round}_{batch_start}.mp4')
-                subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-                               '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '25', fallback],
-                              check=True, capture_output=True, timeout=600)
-                next_clips.append(fallback)
-
-        current_clips = next_clips
-        emit_progress(session_id, 'compositing', min(50 + batch_round * 10, 80), f'Crossfade pass {batch_round}...')
-
-    emit_progress(session_id, 'compositing', 85, 'Adding audio track...')
-    temp_video = current_clips[0]
+    temp_video = os.path.join(work_dir, 'concat_video.mp4')
+    cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_file,
+           '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-pix_fmt', 'yuv420p', '-r', '25',
+           temp_video]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
     # Extend video if shorter than audio
+    emit_progress(session_id, 'compositing', 75, 'Syncing with audio...')
     try:
         vid_dur = get_audio_duration(temp_video)
     except:
@@ -791,6 +737,8 @@ def compose_final_video_with_crossfade(scene_videos, audio_path, output_path, se
         except Exception as e:
             logger.warning(f"Video extension failed: {e}")
 
+    # Add audio
+    emit_progress(session_id, 'compositing', 85, 'Adding audio track...')
     if audio_duration:
         cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path,
                '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-c:a', 'aac', '-b:a', '192k',
@@ -928,7 +876,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
         # Compose
         output_filename = f'visualized_{session_id}.mp4'
         output_path = os.path.join(work_dir, output_filename)
-        compose_final_video_with_crossfade(scene_videos, filepath, output_path, session_id, audio_duration=audio_duration)
+        compose_final_video(scene_videos, filepath, output_path, session_id, audio_duration=audio_duration)
 
         emit_progress(session_id, 'complete', 100, 'Processing complete!', {
             'video_url': f'/download/{session_id}/{output_filename}', 'scenes': scenes[:30]
@@ -1081,9 +1029,9 @@ def preset_subject_image(preset_id):
 
 @app.route('/version')
 def version():
-    return jsonify({"version": "v42", "features": ["presets", "subject", "crossfade", "long_form",
-        "style_enforcement", "retry_logic", "resolution_fix", "dark_mode", "audio_fix",
-        "subject_detection", "dissolve_transitions", "scene_renumber"]})
+    return jsonify({"version": "v43", "features": ["presets", "subject", "long_form",
+        "style_enforcement", "retry_logic", "resolution_1080p", "dark_mode", "audio_fix",
+        "subject_detection", "scene_renumber", "style_text", "admin_dashboard"]})
 
 @app.route('/health')
 def health():
