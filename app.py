@@ -785,6 +785,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 # ===================== MAIN PIPELINE =====================
 def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False, project_title=''):
     try:
+        start_time_ts = time.time()
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
         os.makedirs(work_dir, exist_ok=True)
 
@@ -938,6 +939,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
         })
         
         # Log generation to history
+        processing_time = round(time.time() - start_time_ts, 1)
         credits_data = load_credits()
         # Count credits for this session
         session_credits = sum(e['amount'] for e in credits_data.get('log', []) if e.get('session_id') == session_id)
@@ -951,6 +953,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
             'preset_name': preset_config.get('name', 'Unknown') if preset_config else 'None',
             'animate_intro': animate_intro,
             'credits_used': session_credits,
+            'processing_time': processing_time,
             'status': 'complete',
             'video_url': f'/download/{session_id}/{output_filename}'
         })
