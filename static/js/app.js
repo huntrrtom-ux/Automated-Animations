@@ -145,16 +145,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleProgress(data) {
         const { step, progress, message } = data;
         statusMessage.textContent = message;
-        progressBar.style.width = `${progress}%`;
-        progressText.textContent = `${progress}%`;
+        
+        // Only update progress if >= 0 (-1 means keep current)
+        if (progress >= 0) {
+            progressBar.style.width = `${progress}%`;
+            progressText.textContent = `${progress}%`;
 
-        // Update spinner ring and percentage
-        const spinnerPct = document.getElementById('spinner-pct');
-        const spinnerFill = document.querySelector('.spinner-fill');
-        if (spinnerPct) spinnerPct.textContent = `${progress}%`;
-        if (spinnerFill) {
-            const circumference = 125.6; // 2 * PI * 20
-            spinnerFill.style.strokeDashoffset = circumference - (circumference * progress / 100);
+            // Update spinner ring and percentage
+            const spinnerPct = document.getElementById('spinner-pct');
+            const spinnerFill = document.querySelector('.spinner-fill');
+            if (spinnerPct) spinnerPct.textContent = `${progress}%`;
+            if (spinnerFill) {
+                const circumference = 125.6; // 2 * PI * 20
+                spinnerFill.style.strokeDashoffset = circumference - (circumference * progress / 100);
+            }
         }
 
         const stepOrder = ['transcription', 'scene_detection', 'generation', 'compositing'];

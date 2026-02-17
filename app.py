@@ -134,14 +134,14 @@ def split_audio_for_whisper(filepath, max_size_mb=24):
     return chunks
 
 def transcribe_audio(filepath, session_id):
-    emit_progress(session_id, 'transcription', 5, 'Preparing audio...')
+    emit_progress(session_id, 'transcription', 2, 'Preparing audio...')
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
     chunks = split_audio_for_whisper(filepath)
     all_segments = []
     full_text_parts = []
     time_offset = 0.0
     for ci, chunk_path in enumerate(chunks):
-        emit_progress(session_id, 'transcription', int(10 + 80 * ci / len(chunks)),
+        emit_progress(session_id, 'transcription', int(2 + 12 * ci / len(chunks)),
                      f'Transcribing part {ci+1}/{len(chunks)}...')
         with open(chunk_path, 'rb') as audio_file:
             transcript = client.audio.transcriptions.create(
@@ -159,13 +159,13 @@ def transcribe_audio(filepath, session_id):
         full_text_parts.append(transcript.text if hasattr(transcript, 'text') else str(transcript))
         if chunk_path != filepath and os.path.exists(chunk_path):
             os.remove(chunk_path)
-    emit_progress(session_id, 'transcription', 100, f'Transcribed {len(all_segments)} segments')
+    emit_progress(session_id, 'transcription', 15, f'Transcribed {len(all_segments)} segments')
     return {'full_text': ' '.join(full_text_parts), 'segments': all_segments}
 
 
 # ===================== SCENE DETECTION =====================
 def detect_scene_changes(transcript_data, session_id, has_subject=False, animate_intro=False):
-    emit_progress(session_id, 'scene_detection', 10, 'Analyzing script...')
+    emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
     segments = transcript_data['segments']
     CHUNK_SIZE = 100
@@ -174,7 +174,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, animate
         chunk_segments = segments[chunk_start:chunk_start + CHUNK_SIZE]
         chunk_num = chunk_start // CHUNK_SIZE + 1
         total_chunks = math.ceil(len(segments) / CHUNK_SIZE)
-        emit_progress(session_id, 'scene_detection', int(10 + 80 * chunk_start / len(segments)),
+        emit_progress(session_id, 'scene_detection', int(16 + 8 * chunk_start / len(segments)),
                      f'Analyzing section {chunk_num}/{total_chunks}...')
         segments_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in chunk_segments])
 
@@ -246,7 +246,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, animate
                 all_scenes.append(scene)
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
-    emit_progress(session_id, 'scene_detection', 100, f'Detected {len(all_scenes)} scenes')
+    emit_progress(session_id, 'scene_detection', 25, f'Detected {len(all_scenes)} scenes')
     return all_scenes
 
 
@@ -337,7 +337,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     result['style_text'] = style_text
 
     if preset_config.get('style_base64'):
-        emit_progress(session_id, 'generation', 17, 'Captioning style image...')
+        emit_progress(session_id, 'generation', 26, 'Captioning style image...')
         auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_SCENE", workflow_id, session_ts)
         style_caption = (
             "MANDATORY ART STYLE REFERENCE. Every generated image MUST exactly match this art style: "
@@ -351,17 +351,17 @@ def upload_preset_images_to_whisk(preset_config, session_id):
             style_caption += f" Art style features: {auto_caption[:200]}"
         result['style_caption'] = style_caption
 
-        emit_progress(session_id, 'generation', 18, 'Uploading style reference...')
+        emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
         style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_SCENE", style_caption, workflow_id, session_ts)
         if style_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
         result['style_media_id'] = style_id
     elif style_text:
         # Text-only style — no image upload needed, style applied via userInstruction
-        emit_progress(session_id, 'generation', 18, f'Using text style: {style_text[:50]}...')
+        emit_progress(session_id, 'generation', 28, f'Using text style: {style_text[:50]}...')
 
     if preset_config.get('subject_base64'):
-        emit_progress(session_id, 'generation', 19, 'Captioning subject...')
+        emit_progress(session_id, 'generation', 29, 'Captioning subject...')
         auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts)
         subject_caption = (
             "CHARACTER IDENTITY REFERENCE. This character's face, body type, hair, and clothing should be used "
@@ -373,7 +373,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
             subject_caption += f" Character identity details: {auto_caption[:200]}"
         result['subject_caption'] = subject_caption
 
-        emit_progress(session_id, 'generation', 19, 'Uploading subject character...')
+        emit_progress(session_id, 'generation', 29, 'Uploading subject character...')
         subject_id = upload_image_to_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", subject_caption, workflow_id, session_ts)
         if subject_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
@@ -584,7 +584,7 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
 
     for i in range(90):
         time.sleep(2)
-        emit_progress(session_id, 'generation', 0, f'Animating scene {scene_num}... ({(i+1)*2}s)')
+        emit_progress(session_id, 'generation', -1, f'Animating scene {scene_num}... ({(i+1)*2}s)')
         poll_resp = req.post("https://aisandbox-pa.googleapis.com/v1:runVideoFxSingleClipsStatusCheck",
                              json={"operations": [{"operation": {"name": operation_name}}]}, headers=headers, timeout=30)
         if poll_resp.status_code == 401:
@@ -679,7 +679,7 @@ def create_video_from_image(image_path, video_path, duration):
 
 
 def compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=None):
-    emit_progress(session_id, 'compositing', 5, 'Compositing video...')
+    emit_progress(session_id, 'compositing', 86, 'Compositing video...')
     if len(scene_videos) < 2:
         if scene_videos:
             cmd = ['ffmpeg', '-y', '-i', scene_videos[0], '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
@@ -690,7 +690,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
     work_dir = os.path.dirname(output_path)
 
     # Normalize all clips to 1920x1080 @ 25fps
-    emit_progress(session_id, 'compositing', 10, 'Normalizing clips to 1080p...')
+    emit_progress(session_id, 'compositing', 88, 'Normalizing clips to 1080p...')
     normalized_clips = []
     for i, clip in enumerate(scene_videos):
         norm_path = os.path.join(work_dir, f'norm_{i:04d}.mp4')
@@ -706,7 +706,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
             normalized_clips.append(clip)
 
     # Concat all clips
-    emit_progress(session_id, 'compositing', 50, 'Joining scenes...')
+    emit_progress(session_id, 'compositing', 91, 'Joining scenes...')
     concat_file = os.path.join(work_dir, 'concat_list.txt')
     with open(concat_file, 'w') as f:
         for clip in normalized_clips:
@@ -719,7 +719,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
     # Extend video if shorter than audio
-    emit_progress(session_id, 'compositing', 75, 'Syncing with audio...')
+    emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
     try:
         vid_dur = get_audio_duration(temp_video)
     except:
@@ -738,7 +738,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
             logger.warning(f"Video extension failed: {e}")
 
     # Add audio
-    emit_progress(session_id, 'compositing', 85, 'Adding audio track...')
+    emit_progress(session_id, 'compositing', 97, 'Adding audio track...')
     if audio_duration:
         cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path,
                '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-c:a', 'aac', '-b:a', '192k',
@@ -766,7 +766,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
                 has_subject = preset_config.get('has_subject', False)
 
         audio_duration = get_audio_duration(filepath)
-        emit_progress(session_id, 'init', 5, f'Audio: {audio_duration/60:.1f} min')
+        emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
         transcript_data = transcribe_audio(filepath, session_id)
         scenes = detect_scene_changes(transcript_data, session_id, has_subject, animate_intro)
@@ -815,7 +815,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
         # Upload preset images
         whisk_session = None
         if preset_config:
-            emit_progress(session_id, 'generation', 18, 'Uploading style/subject to Whisk...')
+            emit_progress(session_id, 'generation', 28, 'Uploading style/subject to Whisk...')
             whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
             if whisk_session == "TOKEN_EXPIRED":
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
@@ -831,7 +831,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
             scene_has_subject = scene.get('has_subject', False) and has_subject
 
             logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}")
-            progress = 20 + (60 * i / total)
+            progress = 30 + (55 * i / total)
             emit_progress(session_id, 'generation', int(progress), f'Scene {scene_num}/{total}...')
 
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
@@ -871,7 +871,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
                 create_video_from_image(img_path, vid, duration)
                 scene_videos.append(vid)
 
-            emit_progress(session_id, 'generation', int(progress + 60/total), f'Scene {scene_num}/{total} done')
+            emit_progress(session_id, 'generation', int(30 + 55 * (i+1) / total), f'Scene {scene_num}/{total} done')
 
         # Compose
         output_filename = f'visualized_{session_id}.mp4'
