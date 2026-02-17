@@ -80,14 +80,17 @@ def get_preset(preset_id):
             config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
     return config
 
-def save_preset(name, style_data, subject_data=None):
+def save_preset(name, style_data=None, subject_data=None, style_text=''):
     preset_id = str(uuid.uuid4())[:8]
     preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
     os.makedirs(preset_dir, exist_ok=True)
-    style_bytes = base64.b64decode(style_data)
-    with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
-        f.write(style_bytes)
-    config = {'name': name, 'has_subject': subject_data is not None, 'created_at': time.strftime('%Y-%m-%d %H:%M')}
+    if style_data:
+        style_bytes = base64.b64decode(style_data)
+        with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
+            f.write(style_bytes)
+    config = {'name': name, 'has_subject': subject_data is not None,
+              'has_style_image': style_data is not None, 'style_text': style_text,
+              'created_at': time.strftime('%Y-%m-%d %H:%M')}
     if subject_data:
         subject_bytes = base64.b64decode(subject_data)
         with open(os.path.join(preset_dir, 'subject.png'), 'wb') as f:
@@ -328,6 +331,10 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     workflow_id = str(uuid.uuid4())
     session_ts = f";{int(time.time() * 1000)}"
     result = {"workflow_id": workflow_id, "session_ts": session_ts}
+    
+    # Pass style_text through to generation
+    style_text = preset_config.get('style_text', '')
+    result['style_text'] = style_text
 
     if preset_config.get('style_base64'):
         emit_progress(session_id, 'generation', 17, 'Captioning style image...')
@@ -336,11 +343,12 @@ def upload_preset_images_to_whisk(preset_config, session_id):
             "MANDATORY ART STYLE REFERENCE. Every generated image MUST exactly match this art style: "
             "the line work, outlines, color palette, shading technique, and rendering aesthetic. "
             "NEVER use photorealistic, 3D render, cinematic, or any other style — ONLY this exact style. "
-            "DO NOT reproduce any objects, characters, or scenes from this image. "
-            "ONLY use it as a strict guide for HOW things should look visually."
+            "DO NOT reproduce any objects, characters, or scenes from this image."
         )
+        if style_text:
+            style_caption += f" User style notes: {style_text}"
         if auto_caption:
-            style_caption += f" The art style features: {auto_caption[:200]}"
+            style_caption += f" Art style features: {auto_caption[:200]}"
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 18, 'Uploading style reference...')
@@ -348,6 +356,9 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         if style_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
         result['style_media_id'] = style_id
+    elif style_text:
+        # Text-only style — no image upload needed, style applied via userInstruction
+        emit_progress(session_id, 'generation', 18, f'Using text style: {style_text[:50]}...')
 
     if preset_config.get('subject_base64'):
         emit_progress(session_id, 'generation', 19, 'Captioning subject...')
@@ -373,6 +384,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
 # ===================== WHISK IMAGE GENERATION =====================
 def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
+    # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
         for attempt in range(3):
             result = generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
@@ -387,11 +399,18 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         create_placeholder_image(prompt, output_path)
         return None
 
+    # Text-only style or no style — use basic generateImage with style in prompt
+    style_text = whisk_session.get('style_text', '') if whisk_session else ''
+    if style_text:
+        full_prompt = f"ART STYLE: {style_text}. Scene: {prompt}"
+    else:
+        full_prompt = prompt
+
     headers = whisk_bearer_headers()
     json_data = {
         "clientContext": {"workflowId": str(uuid.uuid4()), "tool": "BACKBONE", "sessionId": f";{int(time.time()*1000)}"},
         "imageModelSettings": {"imageModel": "IMAGEN_3_5", "aspectRatio": "IMAGE_ASPECT_RATIO_LANDSCAPE"},
-        "mediaCategory": "MEDIA_CATEGORY_BOARD", "prompt": prompt, "seed": 0
+        "mediaCategory": "MEDIA_CATEGORY_BOARD", "prompt": full_prompt, "seed": 0
     }
     response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateImage", json=json_data, headers=headers, timeout=120)
     if response.status_code == 401:
@@ -447,12 +466,33 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             }
         })
 
-    styled_prompt = (
-        f"STRICT STYLE REQUIREMENT: This image MUST match the exact art style from the style reference — "
-        f"same line work, same coloring technique, same shading, same level of detail. "
-        f"Do NOT use photorealistic, 3D render, or any other style. "
-        f"The scene to create: {prompt}"
-    )
+    # Build style instruction from text + image
+    style_text = whisk_session.get('style_text', '')
+    has_style_image = whisk_session.get('style_media_id') is not None
+    
+    if has_style_image and style_text:
+        # Both image and text — strongest combination
+        styled_prompt = (
+            f"STRICT STYLE REQUIREMENT: Match the exact art style from the style reference image. "
+            f"Additional style details: {style_text}. "
+            f"Do NOT use photorealistic, 3D render, or any other style. "
+            f"The scene to create: {prompt}"
+        )
+    elif style_text:
+        # Text only — no style image
+        styled_prompt = (
+            f"ART STYLE: {style_text}. "
+            f"Apply this style consistently. Do NOT use photorealistic or 3D render. "
+            f"The scene to create: {prompt}"
+        )
+    else:
+        # Image only
+        styled_prompt = (
+            f"STRICT STYLE REQUIREMENT: Match the exact art style from the style reference — "
+            f"same line work, coloring, shading, detail level. "
+            f"Do NOT use photorealistic, 3D render, or any other style. "
+            f"The scene to create: {prompt}"
+        )
 
     json_data = {
         "clientContext": {"workflowId": workflow_id, "tool": "BACKBONE", "sessionId": session_ts},
@@ -932,18 +972,20 @@ def list_presets():
 @app.route('/api/presets', methods=['POST'])
 def create_preset():
     name = request.form.get('name', 'Untitled')
-    if 'style' not in request.files:
-        return jsonify({'error': 'Style image required'}), 400
-    style_file = request.files['style']
-    if not allowed_image(style_file.filename):
-        return jsonify({'error': 'Invalid style image'}), 400
-    style_b64 = base64.b64encode(style_file.read()).decode('utf-8')
+    style_text = request.form.get('style_text', '').strip()
+    style_b64 = None
+    if 'style' in request.files:
+        style_file = request.files['style']
+        if style_file.filename and allowed_image(style_file.filename):
+            style_b64 = base64.b64encode(style_file.read()).decode('utf-8')
+    if not style_b64 and not style_text:
+        return jsonify({'error': 'Provide a style image, text description, or both.'}), 400
     subject_b64 = None
     if 'subject' in request.files:
         sf = request.files['subject']
         if sf.filename and allowed_image(sf.filename):
             subject_b64 = base64.b64encode(sf.read()).decode('utf-8')
-    preset_id = save_preset(name, style_b64, subject_b64)
+    preset_id = save_preset(name, style_b64, subject_b64, style_text)
     return jsonify({'id': preset_id, 'message': 'Preset saved'})
 
 @app.route('/api/presets/<preset_id>', methods=['DELETE'])

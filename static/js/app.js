@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const animateToggle = document.getElementById('animate-toggle');
 
     const presetNameInput = document.getElementById('preset-name');
+    const styleTextInput = document.getElementById('style-text');
     const styleInput = document.getElementById('style-input');
     const subjectInput = document.getElementById('subject-input');
     const styleUploadBox = document.getElementById('style-upload-box');
@@ -230,19 +231,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     savePresetBtn.addEventListener('click', async () => {
         const name = presetNameInput.value.trim() || 'Untitled';
-        if (!styleFile) { alert('Upload a style image.'); return; }
+        const styleText = styleTextInput.value.trim();
+        if (!styleFile && !styleText) { alert('Provide a style image, text description, or both.'); return; }
         savePresetBtn.disabled = true;
         savePresetBtn.querySelector('span').textContent = 'Saving...';
         const formData = new FormData();
         formData.append('name', name);
-        formData.append('style', styleFile);
+        formData.append('style_text', styleText);
+        if (styleFile) formData.append('style', styleFile);
         if (subjectFile) formData.append('subject', subjectFile);
         try {
             const resp = await fetch('/api/presets', { method: 'POST', body: formData });
             const data = await resp.json();
             if (resp.ok) {
                 setActivePreset(data.id, name);
-                presetNameInput.value = '';
+                presetNameInput.value = ''; styleTextInput.value = '';
                 styleFile = null; subjectFile = null;
                 stylePreview.classList.add('hidden'); stylePlaceholder.classList.remove('hidden');
                 subjectPreview.classList.add('hidden'); subjectPlaceholder.classList.remove('hidden');
@@ -274,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="preset-info">
                         <div class="preset-info-name">${escHtml(p.name)}${isActive ? ' ✓' : ''}</div>
-                        <div class="preset-info-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}</div>
+                        <div class="preset-info-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
                     </div>
                     <div class="preset-actions">
                         <button class="preset-use-btn" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
