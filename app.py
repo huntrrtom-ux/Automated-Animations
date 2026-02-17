@@ -1038,6 +1038,27 @@ def admin_credits_reset():
     save_credits({'used': 0, 'log': []})
     return jsonify({'ok': True, 'message': 'Credits reset to 0'})
 
+@app.route('/admin/credits/set', methods=['POST'])
+def admin_credits_set():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    amount = request.json.get('amount', 0)
+    try:
+        amount = int(amount)
+    except:
+        return jsonify({'error': 'Invalid amount'}), 400
+    data = load_credits()
+    data['used'] = amount
+    data['log'].append({
+        'amount': 0,
+        'description': f'Manual set to {amount}',
+        'session_id': 'admin',
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+    })
+    save_credits(data)
+    return jsonify({'ok': True, 'used': amount})
+
 
 # ===================== ROUTES =====================
 @app.route('/')
@@ -1100,6 +1121,57 @@ def preset_style_image(preset_id):
 def preset_subject_image(preset_id):
     path = os.path.join(app.config['PRESET_FOLDER'], preset_id, 'subject.png')
     return send_file(path, mimetype='image/png') if os.path.exists(path) else ('', 404)
+
+@app.route('/api/presets/export')
+def export_presets():
+    """Export all presets as a JSON file with embedded base64 images."""
+    presets = get_all_presets()
+    export_data = []
+    for p in presets:
+        preset_dir = os.path.join(app.config['PRESET_FOLDER'], p['id'])
+        entry = {'name': p['name'], 'has_subject': p.get('has_subject', False),
+                 'style_text': p.get('style_text', '')}
+        # Embed style image
+        style_path = os.path.join(preset_dir, 'style.png')
+        if os.path.exists(style_path):
+            with open(style_path, 'rb') as f:
+                entry['style_b64'] = base64.b64encode(f.read()).decode('utf-8')
+        # Embed subject image
+        subject_path = os.path.join(preset_dir, 'subject.png')
+        if os.path.exists(subject_path):
+            with open(subject_path, 'rb') as f:
+                entry['subject_b64'] = base64.b64encode(f.read()).decode('utf-8')
+        export_data.append(entry)
+    response = app.response_class(
+        response=json.dumps(export_data, indent=2),
+        mimetype='application/json',
+        headers={'Content-Disposition': 'attachment; filename=presets-export.json'}
+    )
+    return response
+
+@app.route('/api/presets/import', methods=['POST'])
+def import_presets():
+    """Import presets from a JSON export file."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    file = request.files['file']
+    try:
+        data = json.loads(file.read().decode('utf-8'))
+    except Exception as e:
+        return jsonify({'error': f'Invalid JSON file: {str(e)}'}), 400
+    if not isinstance(data, list):
+        return jsonify({'error': 'Invalid format — expected a list of presets'}), 400
+    count = 0
+    for entry in data:
+        name = entry.get('name', 'Imported')
+        style_b64 = entry.get('style_b64')
+        subject_b64 = entry.get('subject_b64')
+        style_text = entry.get('style_text', '')
+        if not style_b64 and not style_text:
+            continue
+        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text)
+        count += 1
+    return jsonify({'ok': True, 'count': count})
 
 @app.route('/version')
 def version():

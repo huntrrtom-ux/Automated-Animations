@@ -47,6 +47,9 @@
         .credits-counter { text-align: center; padding: 1rem 0; }
         .credits-value { font-family: var(--font-display); font-size: 3rem; font-weight: 700; color: var(--accent); }
         .credits-reset-btn { font-size: 0.75rem; padding: 0.35rem 0.8rem; }
+        .credits-set { display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+        .credits-input { width: 140px; font-size: 0.85rem; padding: 0.45rem 0.7rem; }
+        .credits-set-btn { font-size: 0.75rem; padding: 0.45rem 1rem; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -82,10 +85,14 @@
                     <h3 class="credits-title">Credits Used</h3>
                     <p class="credits-desc">1 credit per image · 2 credits per animation (Veo)</p>
                 </div>
-                <button class="btn btn-ghost credits-reset-btn" id="reset-credits-btn">Reset Counter</button>
+                <button class="btn btn-ghost credits-reset-btn" id="reset-credits-btn">Reset to 0</button>
             </div>
             <div class="credits-counter">
                 <span class="credits-value" id="credits-used">0</span>
+            </div>
+            <div class="credits-set">
+                <input type="number" id="credits-set-input" class="text-input credits-input" placeholder="Enter amount">
+                <button class="btn btn-primary credits-set-btn" id="set-credits-btn">Set Credits</button>
             </div>
         </div>
 
@@ -137,6 +144,22 @@
             if (!confirm('Reset credits counter to 0?')) return;
             const resp = await fetch('/admin/credits/reset', { method: 'POST' });
             if (resp.ok) loadCredits();
+        });
+
+        // Set credits manually
+        document.getElementById('set-credits-btn').addEventListener('click', async () => {
+            const input = document.getElementById('credits-set-input');
+            const amount = parseInt(input.value);
+            if (isNaN(amount) || amount < 0) { alert('Enter a valid number'); return; }
+            const resp = await fetch('/admin/credits/set', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ amount })
+            });
+            if (resp.ok) {
+                input.value = '';
+                loadCredits();
+            }
         });
 
         async function loadHistory() {

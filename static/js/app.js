@@ -1,5 +1,25 @@
 // HUNTER MOTIONS — Frontend
 document.addEventListener('DOMContentLoaded', () => {
+
+    // Toast notifications
+    function showToast(message, type = 'info', duration = 4000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        const icons = { success: '✓', error: '✕', info: 'i' };
+        toast.innerHTML = `
+            <div class="toast-icon">${icons[type] || 'i'}</div>
+            <div class="toast-msg">${message}</div>
+            <button class="toast-close" onclick="this.parentElement.classList.add('removing');setTimeout(()=>this.parentElement.remove(),300)">✕</button>
+        `;
+        container.appendChild(toast);
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.classList.add('removing');
+                setTimeout(() => toast.remove(), 300);
+            }
+        }, duration);
+    }
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     const browseBtn = document.getElementById('browse-btn');
@@ -97,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectFile(file) {
         const ext = file.name.split('.').pop().toLowerCase();
-        if (!['mp3','wav','ogg','flac','m4a','aac','webm','mp4'].includes(ext)) { alert('Invalid file type'); return; }
+        if (!['mp3','wav','ogg','flac','m4a','aac','webm','mp4'].includes(ext)) { showToast('Invalid file type — use MP3, WAV, OGG, FLAC, M4A, AAC, WebM, or MP4', 'error'); return; }
         selectedFile = file;
         fileName.textContent = file.name;
         fileSize.textContent = formatSize(file.size);
@@ -112,7 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Generate
     generateBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
-        if (!activePresetId) { alert('Select a preset in Settings first.'); return; }
+        if (!activePresetId) { showToast('Select a preset in Settings first', 'error'); return; }
         generateBtn.disabled = true;
         generateBtn.querySelector('.btn-text').textContent = 'Uploading...';
         const formData = new FormData();
@@ -123,8 +143,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const resp = await fetch('/upload', { method: 'POST', body: formData });
             const data = await resp.json();
             if (resp.ok) { currentSessionId = data.session_id; showProcessing(); }
-            else { alert(data.error || 'Upload failed'); resetBtn(); }
-        } catch { alert('Upload failed.'); resetBtn(); }
+            else { showToast(data.error || 'Upload failed', 'error'); resetBtn(); }
+        } catch { showToast('Upload failed — check your connection', 'error'); resetBtn(); }
     });
 
     function resetBtn() {
@@ -245,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
     savePresetBtn.addEventListener('click', async () => {
         const name = presetNameInput.value.trim() || 'Untitled';
         const styleText = styleTextInput.value.trim();
-        if (!styleFile && !styleText) { alert('Provide a style image, text description, or both.'); return; }
+        if (!styleFile && !styleText) { showToast('Provide a style image, text description, or both', 'error'); return; }
         savePresetBtn.disabled = true;
         savePresetBtn.querySelector('span').textContent = 'Saving...';
         const formData = new FormData();
@@ -258,14 +278,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await resp.json();
             if (resp.ok) {
                 setActivePreset(data.id, name);
+                showToast(`Preset "${name}" saved and activated`, 'success');
                 presetNameInput.value = ''; styleTextInput.value = '';
                 styleFile = null; subjectFile = null;
                 stylePreview.classList.add('hidden'); stylePlaceholder.classList.remove('hidden');
                 subjectPreview.classList.add('hidden'); subjectPlaceholder.classList.remove('hidden');
                 styleInput.value = ''; subjectInput.value = '';
                 loadPresets();
-            } else { alert(data.error || 'Save failed'); }
-        } catch { alert('Failed to save'); }
+            } else { showToast(data.error || 'Save failed', 'error'); }
+        } catch { showToast('Failed to save preset', 'error'); }
         savePresetBtn.disabled = false;
         savePresetBtn.querySelector('span').textContent = 'Save Preset';
     });
@@ -331,6 +352,43 @@ document.addEventListener('DOMContentLoaded', () => {
             presetBarActive.classList.add('hidden');
         }
     }
+
+    // Export presets
+    document.getElementById('export-presets-btn').addEventListener('click', async () => {
+        try {
+            const resp = await fetch('/api/presets/export');
+            if (!resp.ok) { showToast('Export failed', 'error'); return; }
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `hunter-motions-presets-${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Presets exported', 'success');
+        } catch { showToast('Export failed', 'error'); }
+    });
+
+    // Import presets
+    const importFileInput = document.getElementById('import-file-input');
+    document.getElementById('import-presets-btn').addEventListener('click', () => importFileInput.click());
+    importFileInput.addEventListener('change', async (e) => {
+        if (!e.target.files.length) return;
+        const file = e.target.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const resp = await fetch('/api/presets/import', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (resp.ok) {
+                showToast(`Imported ${data.count} preset(s)`, 'success');
+                loadPresets();
+            } else {
+                showToast(data.error || 'Import failed', 'error');
+            }
+        } catch { showToast('Import failed', 'error'); }
+        importFileInput.value = '';
+    });
 
     // Init
     const savedPresetId = localStorage.getItem('activePresetId');
