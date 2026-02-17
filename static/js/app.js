@@ -130,19 +130,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Generate
+    let isGenerating = false;
+
     generateBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
         if (!activePresetId) { showToast('Select a preset in Settings first', 'error'); return; }
         generateBtn.disabled = true;
         generateBtn.querySelector('.btn-text').textContent = 'Uploading...';
+        const titleInput = document.getElementById('project-title');
+        const projectTitle = titleInput.value.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '') || '';
         const formData = new FormData();
         formData.append('audio', selectedFile);
         formData.append('preset_id', activePresetId);
         formData.append('animate_intro', animateToggle.checked ? 'true' : 'false');
+        formData.append('project_title', projectTitle);
         try {
             const resp = await fetch('/upload', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (resp.ok) { currentSessionId = data.session_id; showProcessing(); }
+            if (resp.ok) { currentSessionId = data.session_id; isGenerating = true; showProcessing(); }
             else { showToast(data.error || 'Upload failed', 'error'); resetBtn(); }
         } catch { showToast('Upload failed — check your connection', 'error'); resetBtn(); }
     });
@@ -179,6 +184,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const circumference = 125.6; // 2 * PI * 20
                 spinnerFill.style.strokeDashoffset = circumference - (circumference * progress / 100);
             }
+
+            // Update browser tab title with progress
+            document.title = `(${progress}%) Hunter Motions`;
         }
 
         const stepOrder = ['transcription', 'scene_detection', 'generation', 'compositing'];
@@ -195,14 +203,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         if (step === 'complete' && data.data) {
+            isGenerating = false;
+            document.title = 'Hunter Motions';
             stepOrder.forEach(s => {
                 const el = document.getElementById(`step-${s}`);
                 if (el) { el.classList.remove('active'); el.classList.add('complete'); }
             });
+            // Play chime
+            try { document.getElementById('completion-chime').play(); } catch(e) {}
+            // Fire confetti
+            fireConfetti();
+            showToast('Video generated successfully!', 'success', 6000);
             setTimeout(() => showResult(data.data), 600);
         }
 
         if (step === 'error') {
+            isGenerating = false;
+            document.title = 'Hunter Motions';
             statusMessage.style.color = 'var(--error)';
         }
     }
@@ -234,7 +251,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
     newBtn.addEventListener('click', () => {
-        selectedFile = null; currentSessionId = null;
+        selectedFile = null; currentSessionId = null; isGenerating = false;
+        document.title = 'Hunter Motions';
         fileInput.value = ''; fileSelected.classList.add('hidden');
         resetBtn(); statusMessage.style.color = '';
         resultSection.classList.add('hidden'); processingSection.classList.add('hidden');
@@ -265,12 +283,14 @@ document.addEventListener('DOMContentLoaded', () => {
     savePresetBtn.addEventListener('click', async () => {
         const name = presetNameInput.value.trim() || 'Untitled';
         const styleText = styleTextInput.value.trim();
+        const tags = presetTagsInput.value.trim();
         if (!styleFile && !styleText) { showToast('Provide a style image, text description, or both', 'error'); return; }
         savePresetBtn.disabled = true;
         savePresetBtn.querySelector('span').textContent = 'Saving...';
         const formData = new FormData();
         formData.append('name', name);
         formData.append('style_text', styleText);
+        formData.append('tags', tags);
         if (styleFile) formData.append('style', styleFile);
         if (subjectFile) formData.append('subject', subjectFile);
         try {
@@ -279,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (resp.ok) {
                 setActivePreset(data.id, name);
                 showToast(`Preset "${name}" saved and activated`, 'success');
-                presetNameInput.value = ''; styleTextInput.value = '';
+                presetNameInput.value = ''; styleTextInput.value = ''; presetTagsInput.value = '';
                 styleFile = null; subjectFile = null;
                 stylePreview.classList.add('hidden'); stylePlaceholder.classList.remove('hidden');
                 subjectPreview.classList.add('hidden'); subjectPlaceholder.classList.remove('hidden');
@@ -312,6 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="preset-info">
                         <div class="preset-info-name">${escHtml(p.name)}${isActive ? ' ✓' : ''}</div>
                         <div class="preset-info-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
+                        ${p.tags && p.tags.length ? `<div class="preset-tags">${p.tags.map(t => `<span class="preset-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
                     </div>
                     <div class="preset-actions">
                         <button class="preset-use-btn" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
@@ -352,6 +373,82 @@ document.addEventListener('DOMContentLoaded', () => {
             presetBarActive.classList.add('hidden');
         }
     }
+
+    // Confetti effect
+    function fireConfetti() {
+        const canvas = document.getElementById('confetti-canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const particles = [];
+        const colors = ['#5B9BD5', '#4CAF7D', '#A0C4E8', '#FFD700', '#FF6B6B', '#C084FC'];
+        for (let i = 0; i < 120; i++) {
+            particles.push({
+                x: canvas.width / 2 + (Math.random() - 0.5) * 200,
+                y: canvas.height / 2,
+                vx: (Math.random() - 0.5) * 12,
+                vy: Math.random() * -14 - 4,
+                size: Math.random() * 6 + 3,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                rotation: Math.random() * 360,
+                rotSpeed: (Math.random() - 0.5) * 10,
+                life: 1
+            });
+        }
+        let frame = 0;
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let alive = false;
+            particles.forEach(p => {
+                if (p.life <= 0) return;
+                alive = true;
+                p.x += p.vx;
+                p.vy += 0.25;
+                p.y += p.vy;
+                p.rotation += p.rotSpeed;
+                p.life -= 0.008;
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.rotation * Math.PI / 180);
+                ctx.globalAlpha = Math.max(0, p.life);
+                ctx.fillStyle = p.color;
+                ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+                ctx.restore();
+            });
+            frame++;
+            if (alive && frame < 200) requestAnimationFrame(animate);
+            else ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        animate();
+    }
+
+    // Beforeunload warning during generation
+    window.addEventListener('beforeunload', (e) => {
+        if (isGenerating) {
+            e.preventDefault();
+            e.returnValue = 'A video is being generated. Are you sure you want to leave?';
+        }
+    });
+
+    // Changelog
+    const CHANGELOG_VERSION = 'v44';
+    const changelogOverlay = document.getElementById('changelog-overlay');
+    document.getElementById('open-changelog').addEventListener('click', () => changelogOverlay.classList.remove('hidden'));
+    document.getElementById('changelog-close').addEventListener('click', () => {
+        changelogOverlay.classList.add('hidden');
+        localStorage.setItem('lastSeenChangelog', CHANGELOG_VERSION);
+    });
+    document.getElementById('changelog-dismiss').addEventListener('click', () => {
+        changelogOverlay.classList.add('hidden');
+        localStorage.setItem('lastSeenChangelog', CHANGELOG_VERSION);
+    });
+    // Show changelog on first visit after update
+    if (localStorage.getItem('lastSeenChangelog') !== CHANGELOG_VERSION) {
+        setTimeout(() => changelogOverlay.classList.remove('hidden'), 1000);
+    }
+
+    // Preset tags
+    const presetTagsInput = document.getElementById('preset-tags');
 
     // Export presets
     document.getElementById('export-presets-btn').addEventListener('click', async () => {

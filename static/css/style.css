@@ -230,3 +230,31 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .card-header-row .card-title { margin-bottom: 0; }
 .preset-io-btns { display: flex; gap: 0.4rem; }
 .btn-sm { font-size: 0.72rem; padding: 0.3rem 0.65rem; gap: 0.3rem; }
+
+/* Tooltips */
+.tooltip { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: var(--border); color: var(--text-muted); font-size: 0.6rem; font-weight: 700; cursor: help; position: relative; margin-left: 0.3rem; flex-shrink: 0; }
+.tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%); background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.5rem 0.7rem; border-radius: var(--radius); font-size: 0.72rem; font-weight: 400; white-space: normal; width: 220px; text-align: left; z-index: 100; box-shadow: 0 4px 16px rgba(0,0,0,0.3); line-height: 1.4; }
+
+/* Confetti Canvas */
+#confetti-canvas { position: fixed; inset: 0; pointer-events: none; z-index: 9998; }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+.modal-overlay.hidden { display: none; }
+.modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.5); padding: 1.75rem; width: 90%; max-width: 420px; max-height: 80vh; overflow-y: auto; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.modal-header h3 { font-family: var(--font-display); font-size: 1.2rem; font-weight: 600; margin: 0; }
+.modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 0; }
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { margin-bottom: 1.25rem; }
+.modal-dismiss { width: 100%; justify-content: center; }
+
+/* Changelog */
+.changelog-version { font-family: var(--font-display); font-weight: 700; color: var(--accent); font-size: 0.9rem; }
+.changelog-list { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+.changelog-list li { font-size: 0.82rem; line-height: 1.6; color: var(--text-secondary); }
+.changelog-link { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
+
+/* Preset Tags */
+.preset-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.preset-tag { font-size: 0.62rem; padding: 0.1rem 0.45rem; border-radius: 3px; background: rgba(91,155,213,0.15); color: var(--accent); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }

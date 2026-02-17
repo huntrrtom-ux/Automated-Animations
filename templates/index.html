@@ -54,11 +54,20 @@
                     <div class="option-row">
                         <label class="toggle-label">
                             <span>Animate intro (~30s)</span>
+                            <span class="tooltip" data-tip="Uses Veo AI to animate the first ~30 seconds of your video. Costs 2 extra credits per animated scene.">?</span>
                             <div class="toggle-switch">
                                 <input type="checkbox" id="animate-toggle">
                                 <span class="toggle-slider"></span>
                             </div>
                         </label>
+                    </div>
+
+                    <!-- Project Title -->
+                    <div class="option-row">
+                        <div class="form-group" style="width:100%;margin:0">
+                            <label>Project Title <span class="tooltip" data-tip="Used for the output filename. Spaces become underscores, all lowercase.">?</span></label>
+                            <input type="text" id="project-title" class="text-input" placeholder="e.g. my_video_title">
+                        </div>
                     </div>
 
                     <div class="upload-zone" id="drop-zone">
@@ -178,6 +187,10 @@
                             <input type="text" id="preset-name" placeholder="e.g. Family Guy + Dave" class="text-input">
                         </div>
                         <div class="form-group">
+                            <label>Tags <span class="tooltip" data-tip="Comma-separated labels to organise presets. e.g. client-a, cartoon, blue">?</span></label>
+                            <input type="text" id="preset-tags" placeholder="e.g. client-a, cartoon, dark" class="text-input">
+                        </div>
+                        <div class="form-group">
                             <label>Style Description <span class="label-hint">(text prompt for art style)</span></label>
                             <textarea id="style-text" class="text-input text-area" rows="3" placeholder="e.g. Family Guy cartoon style, thick outlines, flat colors, exaggerated features, comedic expressions"></textarea>
                         </div>
@@ -232,10 +245,49 @@
 
     <footer class="footer">
         <p>Whisper · GPT-4o · Whisk · Veo</p>
+        <button class="link-btn changelog-link" id="open-changelog">What's New</button>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
     <script src="/static/js/app.js"></script>
     <div class="toast-container" id="toast-container"></div>
+    <canvas id="confetti-canvas"></canvas>
+
+    <!-- Changelog Modal -->
+    <div class="modal-overlay hidden" id="changelog-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>What's New</h3>
+                <button class="modal-close" id="changelog-close">✕</button>
+            </div>
+            <div class="modal-body" id="changelog-body">
+                <div class="changelog-entry">
+                    <span class="changelog-version">v44</span>
+                    <ul class="changelog-list">
+                        <li>Custom project titles for output files</li>
+                        <li>Preset import/export for easy backup</li>
+                        <li>Style text descriptions — type a style or combine with image</li>
+                        <li>Toast notifications instead of popup alerts</li>
+                        <li>Admin dashboard with credits tracking</li>
+                        <li>Stronger style enforcement — no more realistic scenes</li>
+                        <li>Full audio coverage — scenes fill entire track</li>
+                        <li>Global progress bar — accurate 0-100% tracking</li>
+                        <li>Completion effects — sound chime and confetti</li>
+                    </ul>
+                </div>
+            </div>
+            <button class="btn btn-primary modal-dismiss" id="changelog-dismiss">Got it</button>
+        </div>
+    </div>
+
+    <!-- Completion chime (short pleasant tone) -->
+    <audio id="completion-chime" preload="auto">
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUoGAACAgICAgICAgICAgICAgICA
+gICAgICAgICAgICBgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6yt
+rq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm
+5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/v/+/v38/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi
+4eDf3t3c29rZ2NfW1dTT0tHQz87NzMvKycjHxsXEw8LBwL++vby7urm4t7a1tLOysbCvrq2sq6qp
+qKempaSjoqGgn56dnJuamZiXlpWUk5KRkI+OjYyLiomIh4aFhIOCgYCAgICAgICAgICAgICAgICA" type="audio/wav">
+    </audio>
 </body>
 </html>

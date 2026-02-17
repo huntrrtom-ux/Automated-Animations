@@ -80,7 +80,7 @@ def get_preset(preset_id):
             config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
     return config
 
-def save_preset(name, style_data=None, subject_data=None, style_text=''):
+def save_preset(name, style_data=None, subject_data=None, style_text='', tags=''):
     preset_id = str(uuid.uuid4())[:8]
     preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
     os.makedirs(preset_dir, exist_ok=True)
@@ -88,8 +88,10 @@ def save_preset(name, style_data=None, subject_data=None, style_text=''):
         style_bytes = base64.b64decode(style_data)
         with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
             f.write(style_bytes)
+    tag_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
     config = {'name': name, 'has_subject': subject_data is not None,
               'has_style_image': style_data is not None, 'style_text': style_text,
+              'tags': tag_list,
               'created_at': time.strftime('%Y-%m-%d %H:%M')}
     if subject_data:
         subject_bytes = base64.b64decode(subject_data)
@@ -755,7 +757,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False):
+def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False, project_title=''):
     try:
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
         os.makedirs(work_dir, exist_ok=True)
@@ -898,7 +900,10 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
             emit_progress(session_id, 'generation', int(30 + 55 * (i+1) / total), f'Scene {scene_num}/{total} done')
 
         # Compose
-        output_filename = f'visualized_{session_id}.mp4'
+        if project_title:
+            output_filename = f'{project_title}.mp4'
+        else:
+            output_filename = f'visualized_{session_id}.mp4'
         output_path = os.path.join(work_dir, output_filename)
         compose_final_video(scene_videos, filepath, output_path, session_id, audio_duration=audio_duration)
 
@@ -1074,11 +1079,12 @@ def upload_audio():
         return jsonify({'error': 'Invalid file'}), 400
     preset_id = request.form.get('preset_id', '')
     animate_intro = request.form.get('animate_intro', 'false') == 'true'
+    project_title = request.form.get('project_title', '').strip()
     session_id = str(uuid.uuid4())[:12]
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, preset_id, animate_intro)
+    socketio.start_background_task(process_voiceover, filepath, session_id, preset_id, animate_intro, project_title)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/download/<session_id>/<filename>')
@@ -1093,6 +1099,7 @@ def list_presets():
 def create_preset():
     name = request.form.get('name', 'Untitled')
     style_text = request.form.get('style_text', '').strip()
+    tags = request.form.get('tags', '').strip()
     style_b64 = None
     if 'style' in request.files:
         style_file = request.files['style']
@@ -1105,7 +1112,7 @@ def create_preset():
         sf = request.files['subject']
         if sf.filename and allowed_image(sf.filename):
             subject_b64 = base64.b64encode(sf.read()).decode('utf-8')
-    preset_id = save_preset(name, style_b64, subject_b64, style_text)
+    preset_id = save_preset(name, style_b64, subject_b64, style_text, tags)
     return jsonify({'id': preset_id, 'message': 'Preset saved'})
 
 @app.route('/api/presets/<preset_id>', methods=['DELETE'])
@@ -1130,7 +1137,7 @@ def export_presets():
     for p in presets:
         preset_dir = os.path.join(app.config['PRESET_FOLDER'], p['id'])
         entry = {'name': p['name'], 'has_subject': p.get('has_subject', False),
-                 'style_text': p.get('style_text', '')}
+                 'style_text': p.get('style_text', ''), 'tags': p.get('tags', [])}
         # Embed style image
         style_path = os.path.join(preset_dir, 'style.png')
         if os.path.exists(style_path):
@@ -1167,9 +1174,10 @@ def import_presets():
         style_b64 = entry.get('style_b64')
         subject_b64 = entry.get('subject_b64')
         style_text = entry.get('style_text', '')
+        tags = ','.join(entry.get('tags', []))
         if not style_b64 and not style_text:
             continue
-        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text)
+        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text, tags)
         count += 1
     return jsonify({'ok': True, 'count': count})
 
