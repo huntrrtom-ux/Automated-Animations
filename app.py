@@ -933,11 +933,88 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
         emit_progress(session_id, 'complete', 100, 'Processing complete!', {
             'video_url': f'/download/{session_id}/{output_filename}', 'scenes': scenes[:30]
         })
+        
+        # Log generation to history
+        log_generation({
+            'session_id': session_id,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'filename': os.path.basename(filepath),
+            'audio_duration': round(audio_duration, 1),
+            'scene_count': total,
+            'preset_id': preset_id or 'none',
+            'preset_name': preset_config.get('name', 'Unknown') if preset_config else 'None',
+            'animate_intro': animate_intro,
+            'status': 'complete',
+            'video_url': f'/download/{session_id}/{output_filename}'
+        })
+        
         return output_path
     except Exception as e:
         logger.error(f"Pipeline error: {e}", exc_info=True)
         emit_progress(session_id, 'error', 0, f'Error: {str(e)}')
+        
+        # Log failed generation
+        log_generation({
+            'session_id': session_id,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'filename': os.path.basename(filepath),
+            'preset_id': preset_id or 'none',
+            'status': 'error',
+            'error': str(e)
+        })
         raise
+
+
+# ===================== GENERATION HISTORY =====================
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generation_history.json')
+
+def log_generation(entry):
+    history = load_history()
+    history.insert(0, entry)  # newest first
+    try:
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to log generation: {e}")
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'hunter2026')
+
+
+@app.route('/admin')
+def admin_page():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return render_template('admin_login.html')
+    history = load_history()
+    return render_template('admin.html', history=history)
+
+
+@app.route('/admin/login', methods=['POST'])
+def admin_login():
+    password = request.form.get('password', '')
+    if password == ADMIN_PASSWORD:
+        resp = jsonify({'ok': True})
+        resp.set_cookie('admin_auth', password, max_age=60*60*24*90, httponly=True, samesite='Lax')
+        return resp
+    return jsonify({'error': 'Wrong password'}), 401
+
+
+@app.route('/admin/history')
+def admin_history_api():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify(load_history())
 
 
 # ===================== ROUTES =====================

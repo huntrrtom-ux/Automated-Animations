@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard — Hunter Motions</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Exo+2:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .admin-header { display: flex; align-items: center; justify-content: space-between; padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); }
+        .admin-header h1 { font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; letter-spacing: 0.06em; }
+        .admin-header .logo-accent { color: var(--accent); }
+        .admin-body { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+        .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; }
+        .stat-value { font-family: var(--font-display); font-size: 2rem; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.15rem; }
+
+        .history-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .history-table th { text-align: left; padding: 0.7rem 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+        .history-table td { padding: 0.7rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        .history-table tr:hover td { background: var(--bg-card-hover); }
+
+        .status-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+        .status-badge.complete { background: var(--success-glow); color: var(--success); }
+        .status-badge.error { background: rgba(212, 91, 91, 0.15); color: var(--error); }
+
+        .dl-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+        .dl-link:hover { color: var(--accent-light); text-decoration: underline; }
+
+        .empty-state { text-align: center; padding: 3rem; color: var(--text-muted); }
+
+        .duration-fmt { font-family: var(--font-display); font-weight: 500; }
+
+        @media (max-width: 700px) {
+            .admin-body { padding: 1rem 0.75rem; }
+            .history-table { font-size: 0.75rem; }
+            .history-table th, .history-table td { padding: 0.5rem 0.4rem; }
+            .hide-mobile { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="admin-header">
+        <h1>HUNTER <span class="logo-accent">MOTIONS</span> — Admin</h1>
+        <a href="/" class="btn btn-ghost" style="padding:0.4rem 1rem;font-size:0.8rem;">← Back to App</a>
+    </div>
+
+    <div class="admin-body">
+        <div class="stats-row" id="stats-row">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-total">0</div>
+                <div class="stat-label">Total Generations</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-complete">0</div>
+                <div class="stat-label">Completed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-errors">0</div>
+                <div class="stat-label">Errors</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-duration">0m</div>
+                <div class="stat-label">Total Audio Processed</div>
+            </div>
+        </div>
+
+        <div class="card" style="overflow-x:auto;">
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Audio File</th>
+                        <th>Duration</th>
+                        <th>Scenes</th>
+                        <th>Preset</th>
+                        <th class="hide-mobile">Animated</th>
+                        <th>Status</th>
+                        <th>Video</th>
+                    </tr>
+                </thead>
+                <tbody id="history-body">
+                </tbody>
+            </table>
+            <div class="empty-state hidden" id="empty-state">No generations yet.</div>
+        </div>
+    </div>
+
+    <script>
+        const historyBody = document.getElementById('history-body');
+        const emptyState = document.getElementById('empty-state');
+
+        function fmtDuration(seconds) {
+            if (!seconds) return '—';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return m > 0 ? `${m}m ${s}s` : `${s}s`;
+        }
+
+        async function loadHistory() {
+            const resp = await fetch('/admin/history');
+            if (resp.status === 401) { window.location.href = '/admin'; return; }
+            const history = await resp.json();
+
+            // Stats
+            document.getElementById('stat-total').textContent = history.length;
+            document.getElementById('stat-complete').textContent = history.filter(h => h.status === 'complete').length;
+            document.getElementById('stat-errors').textContent = history.filter(h => h.status === 'error').length;
+            const totalSec = history.reduce((sum, h) => sum + (h.audio_duration || 0), 0);
+            document.getElementById('stat-duration').textContent = fmtDuration(totalSec);
+
+            // Table
+            if (!history.length) {
+                emptyState.classList.remove('hidden');
+                return;
+            }
+
+            historyBody.innerHTML = history.map(h => `
+                <tr>
+                    <td>${h.timestamp || '—'}</td>
+                    <td>${h.filename || '—'}</td>
+                    <td class="duration-fmt">${fmtDuration(h.audio_duration)}</td>
+                    <td>${h.scene_count || '—'}</td>
+                    <td>${h.preset_name || '—'}</td>
+                    <td class="hide-mobile">${h.animate_intro ? 'Yes' : 'No'}</td>
+                    <td><span class="status-badge ${h.status}">${h.status}</span></td>
+                    <td>${h.status === 'complete' && h.video_url ? `<a class="dl-link" href="${h.video_url}">Download</a>` : '—'}</td>
+                </tr>
+            `).join('');
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>
