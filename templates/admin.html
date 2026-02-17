@@ -39,6 +39,14 @@
             .history-table th, .history-table td { padding: 0.5rem 0.4rem; }
             .hide-mobile { display: none; }
         }
+
+        .credits-card { margin-bottom: 1.5rem; }
+        .credits-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+        .credits-title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; margin: 0; }
+        .credits-desc { font-size: 0.72rem; color: var(--text-muted); margin: 0.2rem 0 0; }
+        .credits-counter { text-align: center; padding: 1rem 0; }
+        .credits-value { font-family: var(--font-display); font-size: 3rem; font-weight: 700; color: var(--accent); }
+        .credits-reset-btn { font-size: 0.75rem; padding: 0.35rem 0.8rem; }
     </style>
 </head>
 <body>
@@ -67,6 +75,20 @@
             </div>
         </div>
 
+        <!-- Credits Counter -->
+        <div class="card credits-card">
+            <div class="credits-header">
+                <div>
+                    <h3 class="credits-title">Credits Used</h3>
+                    <p class="credits-desc">1 credit per image · 2 credits per animation (Veo)</p>
+                </div>
+                <button class="btn btn-ghost credits-reset-btn" id="reset-credits-btn">Reset Counter</button>
+            </div>
+            <div class="credits-counter">
+                <span class="credits-value" id="credits-used">0</span>
+            </div>
+        </div>
+
         <div class="card" style="overflow-x:auto;">
             <table class="history-table">
                 <thead>
@@ -77,6 +99,7 @@
                         <th>Scenes</th>
                         <th>Preset</th>
                         <th class="hide-mobile">Animated</th>
+                        <th>Credits</th>
                         <th>Status</th>
                         <th>Video</th>
                     </tr>
@@ -98,6 +121,23 @@
             const s = Math.floor(seconds % 60);
             return m > 0 ? `${m}m ${s}s` : `${s}s`;
         }
+
+        // Load credits
+        async function loadCredits() {
+            try {
+                const resp = await fetch('/admin/credits');
+                if (resp.status === 401) return;
+                const data = await resp.json();
+                document.getElementById('credits-used').textContent = data.used || 0;
+            } catch (e) { console.error('Credits load error:', e); }
+        }
+
+        // Reset credits
+        document.getElementById('reset-credits-btn').addEventListener('click', async () => {
+            if (!confirm('Reset credits counter to 0?')) return;
+            const resp = await fetch('/admin/credits/reset', { method: 'POST' });
+            if (resp.ok) loadCredits();
+        });
 
         async function loadHistory() {
             const resp = await fetch('/admin/history');
@@ -125,6 +165,7 @@
                     <td>${h.scene_count || '—'}</td>
                     <td>${h.preset_name || '—'}</td>
                     <td class="hide-mobile">${h.animate_intro ? 'Yes' : 'No'}</td>
+                    <td>${h.credits_used || '—'}</td>
                     <td><span class="status-badge ${h.status}">${h.status}</span></td>
                     <td>${h.status === 'complete' && h.video_url ? `<a class="dl-link" href="${h.video_url}">Download</a>` : '—'}</td>
                 </tr>
@@ -132,6 +173,7 @@
         }
 
         loadHistory();
+        loadCredits();
     </script>
 </body>
 </html>

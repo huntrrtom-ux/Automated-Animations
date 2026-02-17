@@ -226,9 +226,12 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, animate
                     '"narration_summary": "brief summary", "visual_description": "detailed scene", '
                     '"has_subject": true, "is_video": false}]}\n\n'
                     f"Rules:\n{animation_note}"
-                    "- Scene durations: 3-7 seconds each\n"
-                    "- Cover the entire duration with no gaps\n"
-                    "- Every new idea or sentence gets its own scene"
+                    "- Scene durations: 5-10 seconds each (longer scenes = better quality)\n"
+                    "- For a 20 minute audio, aim for 40-60 scenes maximum\n"
+                    "- CRITICAL: Cover the ENTIRE duration from first to last second with NO gaps\n"
+                    "- The LAST scene's end_time MUST equal the final timestamp of the transcript\n"
+                    "- Do NOT leave any audio uncovered at the end — every second needs a scene\n"
+                    "- Group related sentences into single scenes rather than one scene per sentence"
                 )},
                 {"role": "user", "content": f"Transcript:\n\n{segments_text}"}
             ],
@@ -340,9 +343,10 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
         auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_SCENE", workflow_id, session_ts)
         style_caption = (
-            "MANDATORY ART STYLE REFERENCE. Every generated image MUST exactly match this art style: "
+            "ABSOLUTE STYLE LOCK. Every generated image MUST exactly match this art style: "
             "the line work, outlines, color palette, shading technique, and rendering aesthetic. "
-            "NEVER use photorealistic, 3D render, cinematic, or any other style — ONLY this exact style. "
+            "FORBIDDEN styles: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo. "
+            "If any element looks realistic, make it MORE stylized. "
             "DO NOT reproduce any objects, characters, or scenes from this image."
         )
         if style_text:
@@ -473,24 +477,28 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     if has_style_image and style_text:
         # Both image and text — strongest combination
         styled_prompt = (
-            f"STRICT STYLE REQUIREMENT: Match the exact art style from the style reference image. "
+            f"ABSOLUTE STYLE LOCK: You MUST match the exact art style from the style reference image. "
             f"Additional style details: {style_text}. "
-            f"Do NOT use photorealistic, 3D render, or any other style. "
+            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
     elif style_text:
         # Text only — no style image
         styled_prompt = (
-            f"ART STYLE: {style_text}. "
-            f"Apply this style consistently. Do NOT use photorealistic or 3D render. "
+            f"ABSOLUTE STYLE LOCK — ART STYLE: {style_text}. "
+            f"Apply this style consistently to every element. "
+            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
     else:
         # Image only
         styled_prompt = (
-            f"STRICT STYLE REQUIREMENT: Match the exact art style from the style reference — "
+            f"ABSOLUTE STYLE LOCK: Match the exact art style from the style reference — "
             f"same line work, coloring, shading, detail level. "
-            f"Do NOT use photorealistic, 3D render, or any other style. "
+            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
 
@@ -507,8 +515,18 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
                         data=json.dumps(json_data), headers=headers, timeout=120)
     logger.info(f"Whisk recipe response for scene {scene_num}: {response.status_code}")
 
+    # Token expired — wait and retry with fresh env vars (allows mid-generation token update)
     if response.status_code == 401:
-        return "TOKEN_EXPIRED"
+        logger.warning(f"Token expired at scene {scene_num}. Waiting 60s for token refresh...")
+        emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
+        time.sleep(60)
+        # Re-read headers from env vars (picks up Railway variable changes)
+        fresh_headers = whisk_cookie_headers()
+        response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                            data=json.dumps(json_data), headers=fresh_headers, timeout=120)
+        logger.info(f"Whisk retry after token refresh for scene {scene_num}: {response.status_code}")
+        if response.status_code == 401:
+            return "TOKEN_EXPIRED"
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
@@ -718,24 +736,8 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
            temp_video]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
-    # Extend video if shorter than audio
+    # Sync with audio duration
     emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
-    try:
-        vid_dur = get_audio_duration(temp_video)
-    except:
-        vid_dur = 0
-
-    if audio_duration and vid_dur < audio_duration - 0.5:
-        extended = os.path.join(work_dir, 'extended_video.mp4')
-        cmd = ['ffmpeg', '-y', '-i', temp_video,
-               '-vf', f'tpad=stop_mode=clone:stop_duration={audio_duration - vid_dur + 1.0}',
-               '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-pix_fmt', 'yuv420p', '-r', '25',
-               extended]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-            temp_video = extended
-        except Exception as e:
-            logger.warning(f"Video extension failed: {e}")
 
     # Add audio
     emit_progress(session_id, 'compositing', 97, 'Adding audio track...')
@@ -775,7 +777,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
             json.dump({'transcript': transcript_data, 'scenes': scenes, 'audio_duration': audio_duration}, f, indent=2)
 
         # Merge short scenes
-        MIN_DUR = 3.0
+        MIN_DUR = 5.0
         merged = []
         for scene in scenes:
             if merged and (merged[-1]['end_time'] - merged[-1]['start_time']) < MIN_DUR:
@@ -796,18 +798,38 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
             scene['scene_number'] = i + 1
         total = len(scenes)
 
-        # FIX #7: Extend last scene to cover full audio
-        if scenes and scenes[-1]['end_time'] < audio_duration:
-            scenes[-1]['end_time'] = audio_duration
+        # FIX #7: Ensure scenes cover full audio with no gaps
+        if scenes:
+            # Extend last scene to cover full audio
+            if scenes[-1]['end_time'] < audio_duration:
+                logger.info(f"Extending last scene from {scenes[-1]['end_time']:.1f}s to {audio_duration:.1f}s")
+                scenes[-1]['end_time'] = audio_duration
+            
+            # Fill any gaps between scenes
+            filled_scenes = [scenes[0]]
+            for i in range(1, len(scenes)):
+                prev_end = filled_scenes[-1]['end_time']
+                curr_start = scenes[i]['start_time']
+                if curr_start > prev_end + 0.5:
+                    # Gap detected — extend previous scene to fill it
+                    logger.info(f"Filling gap: {prev_end:.1f}s to {curr_start:.1f}s by extending scene {filled_scenes[-1]['scene_number']}")
+                    filled_scenes[-1]['end_time'] = curr_start
+                filled_scenes.append(scenes[i])
+            
+            # Ensure first scene starts at 0
+            if filled_scenes[0]['start_time'] > 0.5:
+                filled_scenes[0]['start_time'] = 0.0
+            
+            scenes = filled_scenes
+            total = len(scenes)
 
-        # Animation flags
+        # Animation flags — MANDATORY for all intro scenes
         if animate_intro:
-            last_animated_idx = -1
-            for i, scene in enumerate(scenes):
+            for scene in scenes:
                 if scene['start_time'] < 30.0:
-                    last_animated_idx = i
-            for i, scene in enumerate(scenes):
-                scene['is_video'] = (i <= last_animated_idx)
+                    scene['is_video'] = True  # Mandatory — every intro scene must be animated
+                else:
+                    scene['is_video'] = False
         else:
             for scene in scenes:
                 scene['is_video'] = False
@@ -836,6 +858,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
 
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             image_info = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+            add_credits(1, f'Image generation — scene {scene_num}', session_id)
 
             if image_info == "TOKEN_EXPIRED":
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
@@ -852,6 +875,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                     return None
                 if animated:
+                    add_credits(2, f'Animation (Veo) — scene {scene_num}', session_id)
                     trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
                     try:
                         cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
@@ -883,6 +907,9 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
         })
         
         # Log generation to history
+        credits_data = load_credits()
+        # Count credits for this session
+        session_credits = sum(e['amount'] for e in credits_data.get('log', []) if e.get('session_id') == session_id)
         log_generation({
             'session_id': session_id,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -892,6 +919,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False)
             'preset_id': preset_id or 'none',
             'preset_name': preset_config.get('name', 'Unknown') if preset_config else 'None',
             'animate_intro': animate_intro,
+            'credits_used': session_credits,
             'status': 'complete',
             'video_url': f'/download/{session_id}/{output_filename}'
         })
@@ -963,6 +991,52 @@ def admin_history_api():
     if auth != ADMIN_PASSWORD:
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify(load_history())
+
+
+# ===================== CREDITS TRACKING =====================
+CREDITS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'credits.json')
+
+def load_credits():
+    if os.path.exists(CREDITS_FILE):
+        try:
+            with open(CREDITS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {'used': 0, 'log': []}
+
+def save_credits(data):
+    try:
+        with open(CREDITS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save credits: {e}")
+
+def add_credits(amount, description, session_id=''):
+    data = load_credits()
+    data['used'] += amount
+    data['log'].append({
+        'amount': amount,
+        'description': description,
+        'session_id': session_id,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+    })
+    save_credits(data)
+
+@app.route('/admin/credits')
+def admin_credits_api():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify(load_credits())
+
+@app.route('/admin/credits/reset', methods=['POST'])
+def admin_credits_reset():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    save_credits({'used': 0, 'log': []})
+    return jsonify({'ok': True, 'message': 'Credits reset to 0'})
 
 
 # ===================== ROUTES =====================
