@@ -146,6 +146,27 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!selectedFile) return;
         if (!activePresetId) { showToast('Select a preset in Settings first', 'error'); return; }
         if (!selectedFormat) { showToast('Select a format (Pulse, Flash, or Deep)', 'error'); return; }
+        
+        // Show confirmation modal
+        const presetName = localStorage.getItem('activePresetName') || 'Unknown';
+        const formatNames = { pulse: '⚡ Pulse — Fast-paced entertainment', flash: '🎓 Flash — Animated educational', deep: '📚 Deep — Longform educational' };
+        const titleInput = document.getElementById('project-title');
+        const titleVal = titleInput.value.trim() || 'Untitled';
+        const displayTitle = titleVal.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        
+        document.getElementById('confirm-preset').textContent = presetName;
+        document.getElementById('confirm-format').textContent = formatNames[selectedFormat] || selectedFormat;
+        document.getElementById('confirm-audio').textContent = `${selectedFile.name} (${formatSize(selectedFile.size)})`;
+        document.getElementById('confirm-title').textContent = displayTitle;
+        document.getElementById('confirm-overlay').classList.remove('hidden');
+    });
+
+    // Confirmation modal handlers
+    document.getElementById('confirm-close').addEventListener('click', () => document.getElementById('confirm-overlay').classList.add('hidden'));
+    document.getElementById('confirm-cancel').addEventListener('click', () => document.getElementById('confirm-overlay').classList.add('hidden'));
+    
+    document.getElementById('confirm-start').addEventListener('click', async () => {
+        document.getElementById('confirm-overlay').classList.add('hidden');
         generateBtn.disabled = true;
         generateBtn.querySelector('.btn-text').textContent = 'Uploading...';
         const titleInput = document.getElementById('project-title');
@@ -199,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Update ETA
             const etaEl = document.getElementById('eta-value');
-            if (etaEl && progress > 2 && generationStartTime) {
+            if (etaEl && progress >= 35 && generationStartTime) {
                 const elapsed = (Date.now() - generationStartTime) / 1000; // seconds
                 const rate = progress / elapsed; // percent per second
                 const remaining = (100 - progress) / rate; // seconds left
@@ -214,7 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const mins = Math.floor((remaining % 3600) / 60);
                     etaEl.textContent = `${hrs}h ${mins}m`;
                 }
-            } else if (etaEl && progress <= 2) {
+            } else if (etaEl) {
                 etaEl.textContent = 'Calculating...';
             }
 
@@ -373,7 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${p.tags && p.tags.length ? `<div class="preset-tags">${p.tags.map(t => `<span class="preset-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
                     </div>
                     <div class="preset-actions">
-                        <button class="preset-use-btn" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
+                        <button class="preset-use-btn${isActive ? ' active' : ''}" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
                         <button class="preset-delete-btn" data-id="${p.id}">✕</button>
                     </div>
                 `;

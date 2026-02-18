@@ -798,14 +798,8 @@ def create_placeholder_image(prompt, output_path):
 def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
     """Create a video from a still image with optional smooth Ken Burns effect.
     
-    Uses scale + crop with linear time expressions for buttery smooth movement.
-    The zoom amount is constant rate regardless of clip length — longer clips
-    zoom further, shorter clips zoom less, but the speed is always the same.
-    
-    Effects:
-    - 'none': Static image (Deep format)
-    - 'zoom_in': Slow zoom in (Flash format)
-    - 'rotate_pulse': Rotating effects per scene (Pulse format) — pan_right, zoom_in, zoom_out
+    Uses scale + crop with frame counter (n) for smooth movement on looped images.
+    Zoom rate is 0.5% per second, capped at 15%.
     """
     try:
         if effect == 'rotate_pulse':
@@ -818,61 +812,73 @@ def create_video_from_image(image_path, video_path, duration, effect='none', sce
         
         frames = max(int(duration * 25), 25)
         
-        # Zoom rate: 0.5% per second — so a 10s clip zooms 5%, a 30s clip zooms 15%
-        zoom_pct = duration * 0.5
-        # Cap at 15% to avoid excessive zoom on very long clips
-        zoom_pct = min(zoom_pct, 15.0)
-        
-        # Start dimensions (oversized) and end dimensions
-        # We scale image up, then slowly crop to 1920x1080 from different positions
-        base_w, base_h = 1920, 1080
-        
-        if actual_effect == 'zoom_in':
-            # Start at full oversized, slowly crop tighter (zoom in effect)
-            over = 1 + (zoom_pct / 100)
-            scaled_w = int(base_w * over)
-            scaled_h = int(base_h * over)
-            # Crop starts large and shrinks to 1920x1080 — centred
-            # crop width goes from scaled_w to 1920, crop height from scaled_h to 1080
-            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
-                  f"crop='trunc(({scaled_w}-(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2:"
-                  f"trunc(({scaled_h}-(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2:"
-                  f"({scaled_w}-trunc(({scaled_w}-(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2)/2:"
-                  f"({scaled_h}-trunc(({scaled_h}-(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2)/2',"
-                  f"scale={base_w}:{base_h}")
-        elif actual_effect == 'zoom_out':
-            # Start cropped tight, slowly reveal more (zoom out effect)
-            over = 1 + (zoom_pct / 100)
-            scaled_w = int(base_w * over)
-            scaled_h = int(base_h * over)
-            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
-                  f"crop='trunc(({base_w}+(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2:"
-                  f"trunc(({base_h}+(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2:"
-                  f"({scaled_w}-trunc(({base_w}+(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2)/2:"
-                  f"({scaled_h}-trunc(({base_h}+(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2)/2',"
-                  f"scale={base_w}:{base_h}")
-        elif actual_effect == 'pan_right':
-            # Scale up, then slowly move crop window left to right
-            over = 1 + (zoom_pct / 100)
-            scaled_w = int(base_w * over)
-            scaled_h = int(base_h * over)
-            max_pan = scaled_w - base_w
-            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
-                  f"crop={base_w}:{base_h}:"
-                  f"'trunc(({max_pan}*t/{duration:.2f})/2)*2':"
-                  f"'({scaled_h}-{base_h})/2',"
-                  f"scale={base_w}:{base_h}")
+        if actual_effect != 'none':
+            # Pre-scale image to 110% with PIL so we have room to crop
+            from PIL import Image as PILImage
+            img = PILImage.open(image_path)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            scaled_w, scaled_h = 2112, 1188  # 1920*1.1, 1080*1.1
+            img = img.resize((scaled_w, scaled_h), PILImage.LANCZOS)
+            oversized_path = image_path.replace('.png', '_oversized.png')
+            img.save(oversized_path, 'PNG')
+            
+            # Pixels to move across the full duration
+            extra_w = scaled_w - 1920  # 192 pixels
+            extra_h = scaled_h - 1080  # 108 pixels
+            
+            if actual_effect == 'zoom_in':
+                # Start showing full oversized, end cropped to centre
+                # crop width shrinks from scaled_w to 1920 over frames
+                vf = (f"crop='trunc(({scaled_w}-({extra_w}*n/{frames}))/2)*2:"
+                      f"trunc(({scaled_h}-({extra_h}*n/{frames}))/2)*2:"
+                      f"trunc(({extra_w}*n/{frames})/4)*2:"
+                      f"trunc(({extra_h}*n/{frames})/4)*2',"
+                      f"scale=1920:1080")
+            elif actual_effect == 'zoom_out':
+                # Start cropped tight at centre, end showing full oversized
+                vf = (f"crop='trunc((1920+({extra_w}*n/{frames}))/2)*2:"
+                      f"trunc((1080+({extra_h}*n/{frames}))/2)*2:"
+                      f"trunc(({extra_w}-{extra_w}*n/{frames})/4)*2:"
+                      f"trunc(({extra_h}-{extra_h}*n/{frames})/4)*2',"
+                      f"scale=1920:1080")
+            elif actual_effect == 'pan_right':
+                # Fixed crop size, x position moves left to right
+                vf = (f"crop=1920:1080:"
+                      f"trunc(({extra_w}*n/{frames})/2)*2:"
+                      f"trunc({extra_h}/4)*2,"
+                      f"scale=1920:1080")
+            
+            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', oversized_path,
+                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-pix_fmt', 'yuv420p',
+                   '-vf', vf,
+                   '-r', '25', '-threads', '1', video_path]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+            # Clean up oversized image
+            try:
+                os.remove(oversized_path)
+            except:
+                pass
         else:
-            vf = f"scale={base_w}:{base_h}:force_original_aspect_ratio=increase,crop={base_w}:{base_h}"
-        
-        cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
-               '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
-               '-pix_fmt', 'yuv420p',
-               '-vf', vf,
-               '-r', '25', '-threads', '1', video_path]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-pix_fmt', 'yuv420p',
+                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                   '-r', '25', '-threads', '1', video_path]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=180)
     except Exception as e:
         logger.error(f"Video from image failed: {e}")
+        # Fallback to static if effects fail
+        try:
+            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-pix_fmt', 'yuv420p',
+                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                   '-r', '25', '-threads', '1', video_path]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+        except Exception as e2:
+            logger.error(f"Static fallback also failed: {e2}")
 
 
 def compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=None):
@@ -1071,9 +1077,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 return 'none'  # Animated scenes don't need Ken Burns
             if fmt == 'pulse':
                 return 'rotate_pulse'
-            elif fmt == 'flash':
-                return 'zoom_in'
-            else:  # deep
+            else:  # flash and deep — no effects
                 return 'none'
         
         for i, scene in enumerate(scenes):

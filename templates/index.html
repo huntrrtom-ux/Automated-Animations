@@ -11,7 +11,7 @@
 </head>
 <body>
     <!-- Header -->
-    <div class="version-badge">Beta v48</div>
+    <div class="version-badge">Beta v49</div>
     <header class="header">
         <div class="logo">
             <span class="logo-text">HUNTER <span class="logo-accent">MOTIONS</span></span>
@@ -259,6 +259,41 @@
     <script src="/static/js/app.js"></script>
     <div class="toast-container" id="toast-container"></div>
     <canvas id="confetti-canvas"></canvas>
+
+    <!-- Confirm Generation Modal -->
+    <div class="modal-overlay hidden" id="confirm-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Confirm Generation</h3>
+                <button class="modal-close" id="confirm-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="confirm-subtitle">Please review your settings before starting:</p>
+                <div class="confirm-grid">
+                    <div class="confirm-row">
+                        <span class="confirm-label">Preset</span>
+                        <span class="confirm-value" id="confirm-preset">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Format</span>
+                        <span class="confirm-value" id="confirm-format">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Audio</span>
+                        <span class="confirm-value" id="confirm-audio">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Title</span>
+                        <span class="confirm-value" id="confirm-title">—</span>
+                    </div>
+                </div>
+            </div>
+            <div class="confirm-actions">
+                <button class="btn btn-ghost" id="confirm-cancel">Go Back</button>
+                <button class="btn btn-primary" id="confirm-start">Start Generation</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Changelog Modal -->
     <div class="modal-overlay hidden" id="changelog-overlay">
