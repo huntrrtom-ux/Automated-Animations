@@ -106,7 +106,7 @@
                         <th>Duration</th>
                         <th>Scenes</th>
                         <th>Preset</th>
-                        <th class="hide-mobile">Animated</th>
+                        <th class="hide-mobile">Format</th>
                         <th>Credits</th>
                         <th>Processing Time</th>
                         <th>Status</th>
@@ -189,7 +189,7 @@
                     <td class="duration-fmt">${fmtDuration(h.audio_duration)}</td>
                     <td>${h.scene_count || '—'}</td>
                     <td>${h.preset_name || '—'}</td>
-                    <td class="hide-mobile">${h.animate_intro ? 'Yes' : 'No'}</td>
+                    <td class="hide-mobile">${typeof h.animate_intro === 'string' ? h.animate_intro.charAt(0).toUpperCase() + h.animate_intro.slice(1) : (h.animate_intro ? 'Yes' : 'No')}</td>
                     <td>${h.credits_used || '—'}</td>
                     <td class="duration-fmt">${fmtDuration(h.processing_time)}</td>
                     <td><span class="status-badge ${h.status}">${h.status}</span></td>

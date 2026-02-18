@@ -36,10 +36,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const sceneTimeline = document.getElementById('scene-timeline');
     const downloadBtn = document.getElementById('download-btn');
     const newBtn = document.getElementById('new-btn');
-    const animateToggle = document.getElementById('animate-toggle');
 
     const presetNameInput = document.getElementById('preset-name');
     const styleTextInput = document.getElementById('style-text');
+
+    // Format selector
+    let selectedFormat = null;
+    document.querySelectorAll('.format-card').forEach(card => {
+        card.addEventListener('click', () => {
+            document.querySelectorAll('.format-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            selectedFormat = card.dataset.format;
+        });
+    });
     const styleInput = document.getElementById('style-input');
     const subjectInput = document.getElementById('subject-input');
     const styleUploadBox = document.getElementById('style-upload-box');
@@ -135,6 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
     generateBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
         if (!activePresetId) { showToast('Select a preset in Settings first', 'error'); return; }
+        if (!selectedFormat) { showToast('Select a format (Pulse, Flash, or Deep)', 'error'); return; }
         generateBtn.disabled = true;
         generateBtn.querySelector('.btn-text').textContent = 'Uploading...';
         const titleInput = document.getElementById('project-title');
@@ -142,12 +152,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('audio', selectedFile);
         formData.append('preset_id', activePresetId);
-        formData.append('animate_intro', animateToggle.checked ? 'true' : 'false');
+        formData.append('format', selectedFormat);
         formData.append('project_title', projectTitle);
         try {
             const resp = await fetch('/upload', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (resp.ok) { currentSessionId = data.session_id; isGenerating = true; showProcessing(); }
+            if (resp.ok) { currentSessionId = data.session_id; isGenerating = true;
+                // Show preset name and project title during processing
+                const presetName = localStorage.getItem('activePresetName') || 'Preset';
+                const titleInput = document.getElementById('project-title');
+                const rawTitle = titleInput.value.trim() || selectedFile.name;
+                // Format title: capitalize each word, replace underscores/hyphens with spaces
+                const displayTitle = rawTitle.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                const metaEl = document.getElementById('processing-meta');
+                metaEl.textContent = `${displayTitle} · ${presetName}`;
+                document.title = `(0%) ${displayTitle} — Hunter Motions`;
+                showProcessing(); }
             else { showToast(data.error || 'Upload failed', 'error'); resetBtn(); }
         } catch { showToast('Upload failed — check your connection', 'error'); resetBtn(); }
     });
@@ -186,7 +206,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Update browser tab title with progress
-            document.title = `(${progress}%) Hunter Motions`;
+            const metaText = document.getElementById('processing-meta').textContent;
+            const projLabel = metaText ? metaText.split(' · ')[0] : '';
+            document.title = projLabel ? `(${progress}%) ${projLabel} — Hunter Motions` : `(${progress}%) Hunter Motions`;
         }
 
         const stepOrder = ['transcription', 'scene_detection', 'generation', 'compositing'];
@@ -475,7 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Changelog
-    const CHANGELOG_VERSION = 'v44';
+    const CHANGELOG_VERSION = 'v46';
     const changelogOverlay = document.getElementById('changelog-overlay');
     document.getElementById('open-changelog').addEventListener('click', () => changelogOverlay.classList.remove('hidden'));
     document.getElementById('changelog-close').addEventListener('click', () => {

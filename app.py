@@ -192,12 +192,112 @@ def transcribe_audio(filepath, session_id):
 
 
 # ===================== SCENE DETECTION =====================
-def detect_scene_changes(transcript_data, session_id, has_subject=False, animate_intro=False):
+def get_format_scene_rules(video_format, audio_duration):
+    """Return format-specific scene rules for GPT prompt."""
+    if video_format == 'pulse':
+        return (
+            "FORMAT: PULSE (fast-paced entertainment)\n\n"
+            "INTRO (first ~30 seconds — flexible, end at the nearest natural scene break):\n"
+            "- ALL intro scenes must have is_video: true\n"
+            "- Prioritise SHORT SNAPPY scenes: 1-4 seconds each\n"
+            "- Include ONE hero scene that is 5-8 seconds long\n"
+            "- Split text on visual beats so visuals carry the story\n\n"
+            "BODY (after intro):\n"
+            "- ALL body scenes must have is_video: false\n"
+            "- Scene durations: 2-6 seconds — keep it fast-paced\n"
+            "- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every 10-minute mark "
+            "(can be anywhere within ±30 seconds of each 10-min mark)\n"
+            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
+            "- The LAST scene's end_time MUST equal the final timestamp\n"
+        )
+    elif video_format == 'flash':
+        return (
+            "FORMAT: FLASH (animated educational)\n\n"
+            "INTRO (first ~2 minutes — flexible within ±10 seconds of the 2-minute mark):\n"
+            "- ALL intro scenes must have is_video: true\n"
+            "- Scene durations: 3-8 seconds, but PRIORITISE 3-5 second scenes for high tempo\n"
+            "- Split text on visual beats so visuals carry the story\n\n"
+            "BODY (after intro):\n"
+            "- ALL body scenes must have is_video: false\n"
+            "- Scene durations: 5-15 seconds depending on content\n"
+            "- NO animated scenes after intro\n"
+            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
+            "- The LAST scene's end_time MUST equal the final timestamp\n"
+        )
+    elif video_format == 'deep':
+        mid_point = audio_duration / 2 if audio_duration else 1800
+        return (
+            "FORMAT: DEEP (longform educational, ~60 minutes)\n\n"
+            "INTRO (first ~45-60 seconds — analyse the transcript to find where the hook ends):\n"
+            "- NO animated scenes — all is_video: false\n"
+            "- Scene durations: 2-10 seconds\n"
+            "- FRONT-LOAD with short snappy 2-4 second scenes for the first ~40 seconds\n"
+            "- The last few intro scenes can be slightly longer (5-10s)\n\n"
+            f"FIRST HALF (intro to ~{mid_point:.0f}s):\n"
+            "- Scene durations: 2-7 seconds, PRIORITISE shorter scenes to maintain momentum\n"
+            "- All is_video: false\n\n"
+            f"SECOND HALF (~{mid_point:.0f}s to end):\n"
+            "- Scene durations: 8-15 seconds, more relaxed pacing\n"
+            "- All is_video: false\n\n"
+            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
+            "- The LAST scene's end_time MUST equal the final timestamp\n"
+        )
+    return ""
+
+def get_format_subject_rules(video_format, has_subject):
+    """Return format-specific subject/character rules."""
+    if not has_subject:
+        return ""
+    
+    if video_format == 'flash':
+        return (
+            "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
+            "A character reference image has been uploaded.\n"
+            "- Set has_subject: true for EVERY scene — the character MUST appear in ALL scenes\n"
+            "- Describe the character's SPECIFIC emotion, body language, and action in every scene:\n"
+            "  GOOD: 'looking frustrated while gripping a desk, furrowed brow, clenched jaw'\n"
+            "  GOOD: 'pointing at a diagram with enthusiasm, wide smile'\n"
+            "  BAD: 'the main character appears' (too vague)\n"
+            "- The character should feel ALIVE — never stiff or static\n"
+        )
+    elif video_format == 'deep':
+        return (
+            "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
+            "A character reference image has been uploaded.\n"
+            "- Use the character SPARINGLY — roughly once every 5 minutes\n"
+            "- Set has_subject: true only for scenes near 5-minute intervals (e.g. ~5min, ~10min, ~15min etc.)\n"
+            "- When used, the character can be an educator pointing at something, reacting, or presenting\n"
+            "- All other scenes: has_subject: false\n"
+            "- When has_subject is true, describe emotion, body language, and action richly\n"
+        )
+    else:  # pulse — let GPT decide
+        return (
+            "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
+            "A character reference image has been uploaded. You MUST follow these rules:\n"
+            "- Set has_subject: true for ANY scene that contains a person, human figure, character, narrator, "
+            "host, presenter, worker, businessman, or any living being\n"
+            "- ONLY set has_subject: false for pure establishing shots (landscape, building exterior), "
+            "object-only close-ups, or abstract visuals with absolutely NO people\n"
+            "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
+            "  GOOD: 'looking frustrated while gripping a desk, furrowed brow, clenched jaw'\n"
+            "  GOOD: 'leaning back in chair with a relieved smile, arms behind head'\n"
+            "  GOOD: 'pointing urgently at a whiteboard, mouth open mid-speech'\n"
+            "  BAD: 'the main character appears' (too vague)\n"
+            "  BAD: 'a man stands in a room' (no emotion/action)\n"
+            "- The character should feel ALIVE — never stiff or static\n"
+            "- When in doubt, set has_subject: true\n"
+        )
+
+def detect_scene_changes(transcript_data, session_id, has_subject=False, video_format='pulse', audio_duration=0):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
     segments = transcript_data['segments']
     CHUNK_SIZE = 100
     all_scenes = []
+
+    format_rules = get_format_scene_rules(video_format, audio_duration)
+    subject_note = get_format_subject_rules(video_format, has_subject)
+
     for chunk_start in range(0, len(segments), CHUNK_SIZE):
         chunk_segments = segments[chunk_start:chunk_start + CHUNK_SIZE]
         chunk_num = chunk_start // CHUNK_SIZE + 1
@@ -205,27 +305,6 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, animate
         emit_progress(session_id, 'scene_detection', int(16 + 8 * chunk_start / len(segments)),
                      f'Analyzing section {chunk_num}/{total_chunks}...')
         segments_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in chunk_segments])
-
-        subject_note = ""
-        if has_subject:
-            subject_note = (
-                "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
-                "A character reference image has been uploaded. You MUST follow these rules:\n"
-                "- Set has_subject: true for ANY scene that contains a person, human figure, character, narrator, "
-                "host, presenter, worker, businessman, or any living being\n"
-                "- ONLY set has_subject: false for pure establishing shots (landscape, building exterior), "
-                "object-only close-ups, or abstract visuals with absolutely NO people\n"
-                "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
-                "  GOOD: 'looking frustrated while gripping a desk, furrowed brow, clenched jaw'\n"
-                "  GOOD: 'leaning back in chair with a relieved smile, arms behind head'\n"
-                "  GOOD: 'pointing urgently at a whiteboard, mouth open mid-speech'\n"
-                "  BAD: 'the main character appears' (too vague)\n"
-                "  BAD: 'a man stands in a room' (no emotion/action)\n"
-                "- The character should feel ALIVE — never stiff or static\n"
-                "- When in doubt, set has_subject: true\n"
-            )
-
-        animation_note = "- Scenes in the first 30 seconds should have is_video: true\n" if animate_intro else "- ALL scenes should have is_video: false\n"
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -253,12 +332,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, animate
                     '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 5.0, '
                     '"narration_summary": "brief summary", "visual_description": "detailed scene", '
                     '"has_subject": true, "is_video": false}]}\n\n'
-                    f"Rules:\n{animation_note}"
-                    "- Scene durations: 5-10 seconds each (longer scenes = better quality)\n"
-                    "- For a 20 minute audio, aim for 40-60 scenes maximum\n"
-                    "- CRITICAL: Cover the ENTIRE duration from first to last second with NO gaps\n"
-                    "- The LAST scene's end_time MUST equal the final timestamp of the transcript\n"
-                    "- Do NOT leave any audio uncovered at the end — every second needs a scene\n"
+                    f"{format_rules}"
                     "- Group related sentences into single scenes rather than one scene per sentence"
                 )},
                 {"role": "user", "content": f"Transcript:\n\n{segments_text}"}
@@ -712,12 +786,50 @@ def create_placeholder_image(prompt, output_path):
     img.save(output_path, 'PNG')
 
 
-def create_video_from_image(image_path, video_path, duration):
+def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
+    """Create a video from a still image with optional Ken Burns effect.
+    
+    Effects:
+    - 'none': Static image (Deep format)
+    - 'zoom_in': Slow 3% zoom in (Flash format)
+    - 'rotate_pulse': Rotating effects per scene (Pulse format) — pan_right, zoom_in, zoom_out
+    """
     try:
+        if effect == 'rotate_pulse':
+            # Rotate between effects: pan_right, zoom_in, zoom_out
+            effects_cycle = ['pan_right', 'zoom_in', 'zoom_out']
+            actual_effect = effects_cycle[scene_index % 3]
+        elif effect == 'zoom_in':
+            actual_effect = 'zoom_in'
+        else:
+            actual_effect = 'none'
+        
+        frames = int(duration * 25)
+        if frames < 1:
+            frames = 25
+        
+        if actual_effect == 'zoom_in':
+            # Slow 3% zoom in — scale from 100% to 103%
+            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                  f"zoompan=z='min(zoom+0.0003,1.03)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                  f":d={frames}:s=1920x1080:fps=25")
+        elif actual_effect == 'zoom_out':
+            # Slow 3% zoom out — scale from 103% to 100%
+            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                  f"zoompan=z='if(eq(on,1),1.03,max(zoom-0.0003,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                  f":d={frames}:s=1920x1080:fps=25")
+        elif actual_effect == 'pan_right':
+            # Slow pan right — move 3% of width
+            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                  f"zoompan=z='1.03':x='if(eq(on,1),0,min(x+0.5,iw-iw/zoom))':y='ih/2-(ih/zoom/2)'"
+                  f":d={frames}:s=1920x1080:fps=25")
+        else:
+            vf = 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080'
+        
         cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
                '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
                '-pix_fmt', 'yuv420p',
-               '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+               '-vf', vf,
                '-r', '25', '-threads', '1', video_path]
         subprocess.run(cmd, check=True, capture_output=True, timeout=180)
     except Exception as e:
@@ -742,7 +854,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
         norm_path = os.path.join(work_dir, f'norm_{i:04d}.mp4')
         try:
             cmd = ['ffmpeg', '-y', '-i', clip,
-                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
                    '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-r', '25', '-pix_fmt', 'yuv420p',
                    '-threads', '1', norm_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=120)
@@ -783,7 +895,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False, project_title=''):
+def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse', project_title=''):
     try:
         start_time_ts = time.time()
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
@@ -800,7 +912,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
         transcript_data = transcribe_audio(filepath, session_id)
-        scenes = detect_scene_changes(transcript_data, session_id, has_subject, animate_intro)
+        scenes = detect_scene_changes(transcript_data, session_id, has_subject, video_format, audio_duration)
 
         with open(os.path.join(work_dir, 'scenes.json'), 'w') as f:
             json.dump({'transcript': transcript_data, 'scenes': scenes, 'audio_duration': audio_duration}, f, indent=2)
@@ -852,14 +964,44 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
             scenes = filled_scenes
             total = len(scenes)
 
-        # Animation flags — MANDATORY for all intro scenes
-        if animate_intro:
-            for scene in scenes:
-                if scene['start_time'] < 30.0:
-                    scene['is_video'] = True  # Mandatory — every intro scene must be animated
+        # Animation flags per format — enforce from pipeline side
+        if video_format == 'pulse':
+            # Intro: all scenes before ~30s animated, find natural break
+            intro_end = 30.0
+            last_intro_idx = -1
+            for i, scene in enumerate(scenes):
+                if scene['start_time'] < intro_end:
+                    last_intro_idx = i
+            for i, scene in enumerate(scenes):
+                if i <= last_intro_idx:
+                    scene['is_video'] = True
                 else:
-                    scene['is_video'] = False
-        else:
+                    # Periodic animation every ~10 minutes
+                    mid = (scene['start_time'] + scene['end_time']) / 2
+                    near_10min = any(abs(mid - mark) < 30 for mark in range(600, int(audio_duration), 600))
+                    scene['is_video'] = near_10min and scene.get('is_video', False)
+        elif video_format == 'flash':
+            # Intro: all scenes before ~2min animated, flexible ±10s
+            intro_end = 120.0
+            last_intro_idx = -1
+            for i, scene in enumerate(scenes):
+                if scene['start_time'] < intro_end + 10:
+                    last_intro_idx = i
+                    # Don't go past 130s
+            # Find the scene closest to 120s
+            best_idx = last_intro_idx
+            for i, scene in enumerate(scenes):
+                if abs(scene['end_time'] - 120) < abs(scenes[best_idx]['end_time'] - 120):
+                    if scene['end_time'] <= 130:
+                        best_idx = i
+            for i, scene in enumerate(scenes):
+                scene['is_video'] = (i <= best_idx)
+            # Force subject on every scene for flash
+            if has_subject:
+                for scene in scenes:
+                    scene['has_subject'] = True
+        elif video_format == 'deep':
+            # No animation at all
             for scene in scenes:
                 scene['is_video'] = False
 
@@ -874,14 +1016,26 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
 
         # Generate visuals
         scene_videos = []
+        # Determine Ken Burns effect per format
+        def get_scene_effect(fmt, scene_is_video):
+            if scene_is_video:
+                return 'none'  # Animated scenes don't need Ken Burns
+            if fmt == 'pulse':
+                return 'rotate_pulse'
+            elif fmt == 'flash':
+                return 'zoom_in'
+            else:  # deep
+                return 'none'
+        
         for i, scene in enumerate(scenes):
             scene_num = scene['scene_number']
             start, end = scene['start_time'], scene['end_time']
             duration = end - start
             is_video = scene.get('is_video', False)
             scene_has_subject = scene.get('has_subject', False) and has_subject
+            scene_effect = get_scene_effect(video_format, is_video)
 
-            logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}")
+            logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}, effect={scene_effect}")
             progress = 30 + (55 * i / total)
             emit_progress(session_id, 'generation', int(progress), f'Scene {scene_num}/{total}...')
 
@@ -909,7 +1063,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
                     try:
                         cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
                                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '25',
-                               '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+                               '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
                                '-threads', '1', trimmed]
                         subprocess.run(cmd, check=True, capture_output=True, timeout=120)
                         scene_videos.append(trimmed)
@@ -917,11 +1071,11 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
                         scene_videos.append(video_path)
                 else:
                     vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
-                    create_video_from_image(img_path, vid, duration)
+                    create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                     scene_videos.append(vid)
             else:
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
-                create_video_from_image(img_path, vid, duration)
+                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                 scene_videos.append(vid)
 
             emit_progress(session_id, 'generation', int(30 + 55 * (i+1) / total), f'Scene {scene_num}/{total} done')
@@ -951,7 +1105,7 @@ def process_voiceover(filepath, session_id, preset_id=None, animate_intro=False,
             'scene_count': total,
             'preset_id': preset_id or 'none',
             'preset_name': preset_config.get('name', 'Unknown') if preset_config else 'None',
-            'animate_intro': animate_intro,
+            'animate_intro': video_format,
             'credits_used': session_credits,
             'processing_time': processing_time,
             'status': 'complete',
@@ -1107,13 +1261,13 @@ def upload_audio():
     if not file.filename or not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file'}), 400
     preset_id = request.form.get('preset_id', '')
-    animate_intro = request.form.get('animate_intro', 'false') == 'true'
+    video_format = request.form.get('format', 'pulse')
     project_title = request.form.get('project_title', '').strip()
     session_id = str(uuid.uuid4())[:12]
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, preset_id, animate_intro, project_title)
+    socketio.start_background_task(process_voiceover, filepath, session_id, preset_id, video_format, project_title)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/download/<session_id>/<filename>')

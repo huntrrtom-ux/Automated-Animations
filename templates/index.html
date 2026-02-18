@@ -11,6 +11,7 @@
 </head>
 <body>
     <!-- Header -->
+    <div class="version-badge">Beta v46</div>
     <header class="header">
         <div class="logo">
             <span class="logo-text">HUNTER <span class="logo-accent">MOTIONS</span></span>
@@ -50,16 +51,26 @@
                         </div>
                     </div>
 
-                    <!-- Animation Toggle -->
-                    <div class="option-row">
-                        <label class="toggle-label">
-                            <span>Animate intro (~30s)</span>
-                            <span class="tooltip" data-tip="Uses Veo AI to animate the first ~30 seconds of your video. Costs 2 extra credits per animated scene.">?</span>
-                            <div class="toggle-switch">
-                                <input type="checkbox" id="animate-toggle">
-                                <span class="toggle-slider"></span>
-                            </div>
-                        </label>
+                    <!-- Format Selector -->
+                    <div class="format-selector">
+                        <label>Format <span class="tooltip" data-tip="Choose a production format that controls pacing, animation, and effects.">?</span></label>
+                        <div class="format-cards">
+                            <button class="format-card" data-format="pulse">
+                                <span class="format-icon">⚡</span>
+                                <span class="format-name">Pulse</span>
+                                <span class="format-desc">Fast-paced entertainment</span>
+                            </button>
+                            <button class="format-card" data-format="flash">
+                                <span class="format-icon">🎓</span>
+                                <span class="format-name">Flash</span>
+                                <span class="format-desc">Animated educational</span>
+                            </button>
+                            <button class="format-card" data-format="deep">
+                                <span class="format-icon">📚</span>
+                                <span class="format-name">Deep</span>
+                                <span class="format-desc">Longform educational</span>
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Project Title -->
@@ -112,6 +123,7 @@
                 <div class="card processing-card">
                     <div class="processing-header">
                         <h2>Processing</h2>
+                        <p class="processing-meta" id="processing-meta"></p>
                         <p class="status-msg" id="status-message">Initializing...</p>
                     </div>
 
@@ -262,17 +274,15 @@
             </div>
             <div class="modal-body" id="changelog-body">
                 <div class="changelog-entry">
-                    <span class="changelog-version">v44</span>
+                    <span class="changelog-version">v46</span>
                     <ul class="changelog-list">
-                        <li>Custom project titles for output files</li>
-                        <li>Preset import/export for easy backup</li>
-                        <li>Style text descriptions — type a style or combine with image</li>
-                        <li>Toast notifications instead of popup alerts</li>
-                        <li>Admin dashboard with credits tracking</li>
-                        <li>Stronger style enforcement — no more realistic scenes</li>
-                        <li>Full audio coverage — scenes fill entire track</li>
-                        <li>Global progress bar — accurate 0-100% tracking</li>
-                        <li>Completion effects — sound chime and confetti</li>
+                        <li>New format system: Pulse, Flash, Deep — replacing the animation toggle</li>
+                        <li>Ken Burns effects — slow pan/zoom on still images (Pulse & Flash)</li>
+                        <li>Format-specific pacing, scene durations, and animation rules</li>
+                        <li>Per-format character rules (every scene, sparingly, or AI-decided)</li>
+                        <li>No more black bars — scale-to-fill with crop on all scenes</li>
+                        <li>Processing time tracked in admin dashboard</li>
+                        <li>Beta version badge in top-right corner</li>
                     </ul>
                 </div>
             </div>
