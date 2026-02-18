@@ -11,7 +11,7 @@
 </head>
 <body>
     <!-- Header -->
-    <div class="version-badge">Beta v46</div>
+    <div class="version-badge">Beta v48</div>
     <header class="header">
         <div class="logo">
             <span class="logo-text">HUNTER <span class="logo-accent">MOTIONS</span></span>
@@ -153,15 +153,10 @@
                         <span class="progress-text" id="progress-text">0%</span>
                     </div>
 
-                    <!-- Circular spinner with percentage -->
-                    <div class="spinner-wrap">
-                        <div class="spinner">
-                            <svg viewBox="0 0 50 50">
-                                <circle class="spinner-track" cx="25" cy="25" r="20" fill="none" stroke-width="3"/>
-                                <circle class="spinner-fill" cx="25" cy="25" r="20" fill="none" stroke-width="3"/>
-                            </svg>
-                            <span class="spinner-pct" id="spinner-pct">0%</span>
-                        </div>
+                    <!-- Estimated time remaining -->
+                    <div class="eta-wrap">
+                        <span class="eta-label">Est. time remaining</span>
+                        <span class="eta-value" id="eta-value">Calculating...</span>
                     </div>
                 </div>
             </section>

@@ -678,7 +678,7 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                              "prompt": f"ORIGINAL IMAGE DESCRIPTION:\n{image_info.get('prompt', script)}", "rawBytes": raw_bytes},
         "userInstructions": ""
     }
-    logger.info(f"Whisk Animate starting for scene {scene_num}")
+    logger.info(f"Whisk Animate starting for scene {scene_num} (media_id={image_info.get('media_id', 'none')}, has_raw_bytes={bool(raw_bytes)})")
     response = None
     for attempt in range(5):
         response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateVideo", json=animate_data, headers=headers, timeout=60)
@@ -688,8 +688,11 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         if response.status_code == 429:
             time.sleep(30 * (attempt + 1))
             continue
+        if response.status_code != 200:
+            logger.warning(f"Animate scene {scene_num} HTTP error: {response.status_code} — body: {response.text[:300]}")
         break
     if response.status_code != 200:
+        logger.error(f"Animate scene {scene_num} FAILED: HTTP {response.status_code} after all attempts — reason: {response.text[:500]}")
         return False
     result = response.json()
     operation_name = None
@@ -700,6 +703,7 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
     if not operation_name:
         operation_name = result.get("name", "")
     if not operation_name:
+        logger.error(f"Animate scene {scene_num} FAILED: No operation_name in response — keys: {list(result.keys())}, response: {json.dumps(result)[:500]}")
         return False
 
     for i in range(90):
@@ -710,6 +714,7 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         if poll_resp.status_code == 401:
             return "TOKEN_EXPIRED"
         if poll_resp.status_code != 200:
+            logger.warning(f"Poll {i+1} scene {scene_num}: HTTP {poll_resp.status_code}")
             continue
         poll_result = poll_resp.json()
         status = poll_result.get("status", "")
@@ -729,9 +734,13 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 with open(output_path, 'wb') as f:
                     f.write(base64.b64decode(raw_bytes))
                 return True
+            logger.error(f"Animate scene {scene_num} FAILED: Status successful but NO raw_bytes — keys: {list(poll_result.keys())}")
             return False
         if status == "MEDIA_GENERATION_STATUS_FAILED":
+            fail_reason = poll_result.get("failureReason", poll_result.get("error", "unknown"))
+            logger.error(f"Animate scene {scene_num} FAILED: Veo returned FAILED — reason: {fail_reason}, full: {json.dumps(poll_result)[:500]}")
             return False
+    logger.error(f"Animate scene {scene_num} FAILED: Polling timed out after 180s — last status: {status}")
     return False
 
 
@@ -787,16 +796,19 @@ def create_placeholder_image(prompt, output_path):
 
 
 def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
-    """Create a video from a still image with optional Ken Burns effect.
+    """Create a video from a still image with optional smooth Ken Burns effect.
+    
+    Uses scale + crop with linear time expressions for buttery smooth movement.
+    The zoom amount is constant rate regardless of clip length — longer clips
+    zoom further, shorter clips zoom less, but the speed is always the same.
     
     Effects:
     - 'none': Static image (Deep format)
-    - 'zoom_in': Slow 3% zoom in (Flash format)
+    - 'zoom_in': Slow zoom in (Flash format)
     - 'rotate_pulse': Rotating effects per scene (Pulse format) — pan_right, zoom_in, zoom_out
     """
     try:
         if effect == 'rotate_pulse':
-            # Rotate between effects: pan_right, zoom_in, zoom_out
             effects_cycle = ['pan_right', 'zoom_in', 'zoom_out']
             actual_effect = effects_cycle[scene_index % 3]
         elif effect == 'zoom_in':
@@ -804,27 +816,54 @@ def create_video_from_image(image_path, video_path, duration, effect='none', sce
         else:
             actual_effect = 'none'
         
-        frames = int(duration * 25)
-        if frames < 1:
-            frames = 25
+        frames = max(int(duration * 25), 25)
+        
+        # Zoom rate: 0.5% per second — so a 10s clip zooms 5%, a 30s clip zooms 15%
+        zoom_pct = duration * 0.5
+        # Cap at 15% to avoid excessive zoom on very long clips
+        zoom_pct = min(zoom_pct, 15.0)
+        
+        # Start dimensions (oversized) and end dimensions
+        # We scale image up, then slowly crop to 1920x1080 from different positions
+        base_w, base_h = 1920, 1080
         
         if actual_effect == 'zoom_in':
-            # Slow 3% zoom in — scale from 100% to 103%
-            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
-                  f"zoompan=z='min(zoom+0.0003,1.03)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-                  f":d={frames}:s=1920x1080:fps=25")
+            # Start at full oversized, slowly crop tighter (zoom in effect)
+            over = 1 + (zoom_pct / 100)
+            scaled_w = int(base_w * over)
+            scaled_h = int(base_h * over)
+            # Crop starts large and shrinks to 1920x1080 — centred
+            # crop width goes from scaled_w to 1920, crop height from scaled_h to 1080
+            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+                  f"crop='trunc(({scaled_w}-(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2:"
+                  f"trunc(({scaled_h}-(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2:"
+                  f"({scaled_w}-trunc(({scaled_w}-(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2)/2:"
+                  f"({scaled_h}-trunc(({scaled_h}-(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2)/2',"
+                  f"scale={base_w}:{base_h}")
         elif actual_effect == 'zoom_out':
-            # Slow 3% zoom out — scale from 103% to 100%
-            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
-                  f"zoompan=z='if(eq(on,1),1.03,max(zoom-0.0003,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-                  f":d={frames}:s=1920x1080:fps=25")
+            # Start cropped tight, slowly reveal more (zoom out effect)
+            over = 1 + (zoom_pct / 100)
+            scaled_w = int(base_w * over)
+            scaled_h = int(base_h * over)
+            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+                  f"crop='trunc(({base_w}+(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2:"
+                  f"trunc(({base_h}+(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2:"
+                  f"({scaled_w}-trunc(({base_w}+(({scaled_w}-{base_w})*t/{duration:.2f}))/2)*2)/2:"
+                  f"({scaled_h}-trunc(({base_h}+(({scaled_h}-{base_h})*t/{duration:.2f}))/2)*2)/2',"
+                  f"scale={base_w}:{base_h}")
         elif actual_effect == 'pan_right':
-            # Slow pan right — move 3% of width
-            vf = (f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
-                  f"zoompan=z='1.03':x='if(eq(on,1),0,min(x+0.5,iw-iw/zoom))':y='ih/2-(ih/zoom/2)'"
-                  f":d={frames}:s=1920x1080:fps=25")
+            # Scale up, then slowly move crop window left to right
+            over = 1 + (zoom_pct / 100)
+            scaled_w = int(base_w * over)
+            scaled_h = int(base_h * over)
+            max_pan = scaled_w - base_w
+            vf = (f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+                  f"crop={base_w}:{base_h}:"
+                  f"'trunc(({max_pan}*t/{duration:.2f})/2)*2':"
+                  f"'({scaled_h}-{base_h})/2',"
+                  f"scale={base_w}:{base_h}")
         else:
-            vf = 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080'
+            vf = f"scale={base_w}:{base_h}:force_original_aspect_ratio=increase,crop={base_w}:{base_h}"
         
         cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
                '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
@@ -846,11 +885,14 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
         return output_path
 
     work_dir = os.path.dirname(output_path)
+    total_clips = len(scene_videos)
 
     # Normalize all clips to 1920x1080 @ 25fps
-    emit_progress(session_id, 'compositing', 88, 'Normalizing clips to 1080p...')
     normalized_clips = []
     for i, clip in enumerate(scene_videos):
+        clip_progress = 88 + int(3 * i / total_clips)  # 88-91% range
+        emit_progress(session_id, 'compositing', clip_progress, f'Normalizing clip {i+1}/{total_clips}...')
+        logger.info(f"[{session_id[:12]}] Normalizing clip {i+1}/{total_clips}: {os.path.basename(clip)}")
         norm_path = os.path.join(work_dir, f'norm_{i:04d}.mp4')
         try:
             cmd = ['ffmpeg', '-y', '-i', clip,
@@ -860,7 +902,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
             subprocess.run(cmd, check=True, capture_output=True, timeout=120)
             normalized_clips.append(norm_path)
         except Exception as e:
-            logger.warning(f"Normalize failed for clip {i}, using original: {e}")
+            logger.warning(f"Normalize failed for clip {i+1}/{total_clips}, using original: {e}")
             normalized_clips.append(clip)
 
     # Concat all clips
@@ -982,20 +1024,27 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     scene['is_video'] = near_10min and scene.get('is_video', False)
         elif video_format == 'flash':
             # Intro: all scenes before ~2min animated, flexible ±10s
-            intro_end = 120.0
+            # Find the last scene that starts before 130s (2min + 10s buffer)
+            intro_cutoff = 130.0
             last_intro_idx = -1
             for i, scene in enumerate(scenes):
-                if scene['start_time'] < intro_end + 10:
+                if scene['start_time'] < intro_cutoff:
                     last_intro_idx = i
-                    # Don't go past 130s
-            # Find the scene closest to 120s
-            best_idx = last_intro_idx
-            for i, scene in enumerate(scenes):
-                if abs(scene['end_time'] - 120) < abs(scenes[best_idx]['end_time'] - 120):
-                    if scene['end_time'] <= 130:
+            # Now find the scene whose end_time is closest to 120s within the range
+            if last_intro_idx >= 0:
+                best_idx = 0
+                best_diff = abs(scenes[0]['end_time'] - 120)
+                for i in range(last_intro_idx + 1):
+                    diff = abs(scenes[i]['end_time'] - 120)
+                    if diff <= best_diff:
+                        best_diff = diff
                         best_idx = i
-            for i, scene in enumerate(scenes):
-                scene['is_video'] = (i <= best_idx)
+                # Force ALL scenes up to best_idx to be animated
+                for i, scene in enumerate(scenes):
+                    if i <= best_idx:
+                        scene['is_video'] = True  # Mandatory — no exceptions
+                    else:
+                        scene['is_video'] = False
             # Force subject on every scene for flash
             if has_subject:
                 for scene in scenes:
@@ -1049,14 +1098,31 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
 
             if is_video and image_info and isinstance(image_info, dict):
                 video_path = os.path.join(work_dir, f'scene_{scene_num:04d}_animated.mp4')
-                try:
-                    animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num)
-                except Exception as e:
-                    logger.error(f"Animation error scene {scene_num}: {e}")
-                    animated = False
-                if animated == "TOKEN_EXPIRED":
-                    emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
-                    return None
+                animated = False
+                max_anim_retries = 5
+                for anim_attempt in range(max_anim_retries):
+                    try:
+                        animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num)
+                    except Exception as e:
+                        logger.error(f"Animation error scene {scene_num} (attempt {anim_attempt+1}/{max_anim_retries}): {e}")
+                        animated = False
+                    if animated == "TOKEN_EXPIRED":
+                        emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                        return None
+                    if animated:
+                        break
+                    logger.warning(f"Animation attempt {anim_attempt+1}/{max_anim_retries} FAILED for scene {scene_num} — {'retrying...' if anim_attempt < max_anim_retries - 1 else 'regenerating image and retrying...'}")
+                    emit_progress(session_id, 'generation', int(progress), f'Scene {scene_num}/{total} — animation retry {anim_attempt+1}...')
+                    if anim_attempt < max_anim_retries - 1:
+                        time.sleep(3)
+                    # On last retry, regenerate the image entirely and try one final time
+                    if anim_attempt == max_anim_retries - 2:
+                        logger.info(f"Regenerating image for scene {scene_num} before final animation attempt")
+                        image_info = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                        if image_info == "TOKEN_EXPIRED":
+                            emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                            return None
+
                 if animated:
                     add_credits(2, f'Animation (Veo) — scene {scene_num}', session_id)
                     trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
@@ -1070,9 +1136,20 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     except:
                         scene_videos.append(video_path)
                 else:
+                    logger.error(f"=== ANIMATION DIAGNOSTIC DUMP for scene {scene_num} ===")
+                    logger.error(f"  Scene: {scene_num}/{total}, start={start:.1f}s, end={end:.1f}s, duration={duration:.1f}s")
+                    logger.error(f"  is_video={is_video}, has_subject={scene_has_subject}, format={video_format}")
+                    logger.error(f"  image_info type={type(image_info).__name__}, media_id={image_info.get('media_id', 'none') if isinstance(image_info, dict) else 'N/A'}")
+                    logger.error(f"  All {max_anim_retries} animation attempts FAILED — falling back to still image")
+                    logger.error(f"=== END DIAGNOSTIC ===")
                     vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                     create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                     scene_videos.append(vid)
+            elif is_video and (not image_info or not isinstance(image_info, dict)):
+                logger.warning(f"Scene {scene_num} marked is_video=True but image_info invalid (type={type(image_info).__name__}) — falling back to still")
+                vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
+                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
+                scene_videos.append(vid)
             else:
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)

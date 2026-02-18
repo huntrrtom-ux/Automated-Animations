@@ -140,6 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Generate
     let isGenerating = false;
+    let generationStartTime = null;
 
     generateBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
@@ -157,7 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const resp = await fetch('/upload', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (resp.ok) { currentSessionId = data.session_id; isGenerating = true;
+            if (resp.ok) { currentSessionId = data.session_id; isGenerating = true; generationStartTime = Date.now();
                 // Show preset name and project title during processing
                 const presetName = localStorage.getItem('activePresetName') || 'Preset';
                 const titleInput = document.getElementById('project-title');
@@ -196,13 +197,25 @@ document.addEventListener('DOMContentLoaded', () => {
             progressBar.style.width = `${progress}%`;
             progressText.textContent = `${progress}%`;
 
-            // Update spinner ring and percentage
-            const spinnerPct = document.getElementById('spinner-pct');
-            const spinnerFill = document.querySelector('.spinner-fill');
-            if (spinnerPct) spinnerPct.textContent = `${progress}%`;
-            if (spinnerFill) {
-                const circumference = 125.6; // 2 * PI * 20
-                spinnerFill.style.strokeDashoffset = circumference - (circumference * progress / 100);
+            // Update ETA
+            const etaEl = document.getElementById('eta-value');
+            if (etaEl && progress > 2 && generationStartTime) {
+                const elapsed = (Date.now() - generationStartTime) / 1000; // seconds
+                const rate = progress / elapsed; // percent per second
+                const remaining = (100 - progress) / rate; // seconds left
+                if (remaining < 60) {
+                    etaEl.textContent = `${Math.ceil(remaining)}s`;
+                } else if (remaining < 3600) {
+                    const mins = Math.floor(remaining / 60);
+                    const secs = Math.floor(remaining % 60);
+                    etaEl.textContent = `${mins}m ${secs}s`;
+                } else {
+                    const hrs = Math.floor(remaining / 3600);
+                    const mins = Math.floor((remaining % 3600) / 60);
+                    etaEl.textContent = `${hrs}h ${mins}m`;
+                }
+            } else if (etaEl && progress <= 2) {
+                etaEl.textContent = 'Calculating...';
             }
 
             // Update browser tab title with progress
@@ -273,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
     newBtn.addEventListener('click', () => {
-        selectedFile = null; currentSessionId = null; isGenerating = false;
+        selectedFile = null; currentSessionId = null; isGenerating = false; generationStartTime = null;
         document.title = 'Hunter Motions';
         fileInput.value = ''; fileSelected.classList.add('hidden');
         resetBtn(); statusMessage.style.color = '';
