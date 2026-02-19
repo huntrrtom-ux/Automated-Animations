@@ -1069,43 +1069,19 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     near_10min = any(abs(mid - mark) < 30 for mark in range(600, int(audio_duration), 600))
                     scene['is_video'] = near_10min and scene.get('is_video', False)
         elif video_format == 'flash':
-            # Intro: all scenes before ~2min animated, flexible ±10s
-            # Find the last scene that starts before 130s (2min + 10s buffer)
-            intro_cutoff = 130.0
-            last_intro_idx = -1
+            # Flash: animate ALL scenes in the first ~2 minutes
+            # Simple rule: any scene that STARTS before 120s gets animated
+            intro_cutoff = 120.0
+            animated_count = 0
             for i, scene in enumerate(scenes):
                 if scene['start_time'] < intro_cutoff:
-                    last_intro_idx = i
-            # Now find the scene whose end_time is closest to 120s within the range
-            if last_intro_idx >= 0:
-                best_idx = 0
-                best_diff = abs(scenes[0]['end_time'] - 120)
-                for i in range(last_intro_idx + 1):
-                    diff = abs(scenes[i]['end_time'] - 120)
-                    if diff <= best_diff:
-                        best_diff = diff
-                        best_idx = i
-                
-                # Safety: if audio is >2min, ensure at least a few intro scenes are animated
-                # If best_idx is 0 but there are clearly scenes in the 0-120s range, 
-                # use all scenes that START before 120s
-                if best_idx == 0 and last_intro_idx > 0:
-                    logger.warning(f"Flash intro: best_idx=0 but last_intro_idx={last_intro_idx}, using last_intro_idx instead")
-                    best_idx = last_intro_idx
-                
-                logger.info(f"Flash intro: last_intro_idx={last_intro_idx}, best_idx={best_idx}, best_diff={best_diff:.1f}s")
-                logger.info(f"Flash intro: animating scenes 1 through {best_idx+1} (end_time={scenes[best_idx]['end_time']:.1f}s)")
-                # Force ALL scenes up to best_idx to be animated
-                animated_count = 0
-                for i, scene in enumerate(scenes):
-                    if i <= best_idx:
-                        scene['is_video'] = True  # Mandatory — no exceptions
-                        animated_count += 1
-                    else:
-                        scene['is_video'] = False
-                logger.info(f"Flash intro: {animated_count} scenes marked for animation")
-            else:
-                logger.warning("Flash intro: No scenes found before 130s cutoff!")
+                    scene['is_video'] = True
+                    animated_count += 1
+                else:
+                    scene['is_video'] = False
+            logger.info(f"Flash intro: {animated_count} scenes marked for animation (all starting before {intro_cutoff}s)")
+            if animated_count > 0:
+                logger.info(f"Flash intro: first animated scene ends at {scenes[0]['end_time']:.1f}s, last animated scene ends at {scenes[animated_count-1]['end_time']:.1f}s")
             # Force subject on every scene for flash
             if has_subject:
                 for scene in scenes:
