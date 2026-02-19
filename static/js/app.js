@@ -531,7 +531,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Changelog
-    const CHANGELOG_VERSION = 'v46';
+    const CHANGELOG_VERSION = 'v50';
     const changelogOverlay = document.getElementById('changelog-overlay');
     document.getElementById('open-changelog').addEventListener('click', () => changelogOverlay.classList.remove('hidden'));
     document.getElementById('changelog-close').addEventListener('click', () => {

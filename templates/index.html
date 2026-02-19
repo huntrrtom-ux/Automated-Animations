@@ -304,6 +304,41 @@
             </div>
             <div class="modal-body" id="changelog-body">
                 <div class="changelog-entry">
+                    <span class="changelog-version">v50</span>
+                    <ul class="changelog-list">
+                        <li>Batched generation — images 10 at a time, animations 3 at a time</li>
+                        <li>Generation time reduced from 60-90 mins to ~15-25 mins</li>
+                        <li>Three-phase pipeline: batch images → batch animations → assemble</li>
+                    </ul>
+                </div>
+                <div class="changelog-entry">
+                    <span class="changelog-version">v49</span>
+                    <ul class="changelog-list">
+                        <li>Gemini 2.5 Flash integration for scene detection (15x cheaper)</li>
+                        <li>Falls back to GPT-4o if no Gemini key set</li>
+                        <li>Whisper remains on OpenAI for transcription</li>
+                    </ul>
+                </div>
+                <div class="changelog-entry">
+                    <span class="changelog-version">v48</span>
+                    <ul class="changelog-list">
+                        <li>Pre-generation confirmation modal — review settings before starting</li>
+                        <li>Smooth Ken Burns zoom (replaced jittery zoompan with scale+crop)</li>
+                        <li>Flash animation retry loop with diagnostic logging</li>
+                        <li>Flash intro scenes forced to animate (up to 2 min)</li>
+                        <li>Removed slow zoom from Flash format — still images only</li>
+                        <li>Green active preset indicator</li>
+                    </ul>
+                </div>
+                <div class="changelog-entry">
+                    <span class="changelog-version">v47</span>
+                    <ul class="changelog-list">
+                        <li>ETA display — estimated time remaining during generation</li>
+                        <li>Per-clip compositing progress in logs and UI</li>
+                        <li>Baby blue light mode (replaced bright white)</li>
+                    </ul>
+                </div>
+                <div class="changelog-entry">
                     <span class="changelog-version">v46</span>
                     <ul class="changelog-list">
                         <li>New format system: Pulse, Flash, Deep — replacing the animation toggle</li>

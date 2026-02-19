@@ -22,14 +22,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
+# Use /data for persistent storage on Railway (volume mount), fallback to local for dev
+PERSISTENT_DIR = '/data' if os.path.isdir('/data') else os.path.dirname(os.path.abspath(__file__))
+
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 app.config['OUTPUT_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs')
-app.config['PRESET_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'presets')
+app.config['PRESET_FOLDER'] = os.path.join(PERSISTENT_DIR, 'presets')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PRESET_FOLDER'], exist_ok=True)
+
+logger.info(f"Persistent storage: {PERSISTENT_DIR} ({'Railway volume' if PERSISTENT_DIR == '/data' else 'local'})")
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
@@ -1326,7 +1331,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
 
 
 # ===================== GENERATION HISTORY =====================
-HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generation_history.json')
+HISTORY_FILE = os.path.join(PERSISTENT_DIR, 'generation_history.json')
 
 def log_generation(entry):
     history = load_history()
@@ -1378,7 +1383,7 @@ def admin_history_api():
 
 
 # ===================== CREDITS TRACKING =====================
-CREDITS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'credits.json')
+CREDITS_FILE = os.path.join(PERSISTENT_DIR, 'credits.json')
 
 def load_credits():
     if os.path.exists(CREDITS_FILE):
