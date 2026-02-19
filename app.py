@@ -1085,14 +1085,25 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     if diff <= best_diff:
                         best_diff = diff
                         best_idx = i
+                
+                # Safety: if audio is >2min, ensure at least a few intro scenes are animated
+                # If best_idx is 0 but there are clearly scenes in the 0-120s range, 
+                # use all scenes that START before 120s
+                if best_idx == 0 and last_intro_idx > 0:
+                    logger.warning(f"Flash intro: best_idx=0 but last_intro_idx={last_intro_idx}, using last_intro_idx instead")
+                    best_idx = last_intro_idx
+                
                 logger.info(f"Flash intro: last_intro_idx={last_intro_idx}, best_idx={best_idx}, best_diff={best_diff:.1f}s")
                 logger.info(f"Flash intro: animating scenes 1 through {best_idx+1} (end_time={scenes[best_idx]['end_time']:.1f}s)")
                 # Force ALL scenes up to best_idx to be animated
+                animated_count = 0
                 for i, scene in enumerate(scenes):
                     if i <= best_idx:
                         scene['is_video'] = True  # Mandatory — no exceptions
+                        animated_count += 1
                     else:
                         scene['is_video'] = False
+                logger.info(f"Flash intro: {animated_count} scenes marked for animation")
             else:
                 logger.warning("Flash intro: No scenes found before 130s cutoff!")
             # Force subject on every scene for flash
