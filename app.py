@@ -868,10 +868,10 @@ def create_video_from_image(image_path, video_path, duration, effect='none', sce
                       f"scale=1920:1080")
             
             cmd = ['ffmpeg', '-y', '-loop', '1', '-i', oversized_path,
-                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
                    '-pix_fmt', 'yuv420p',
                    '-vf', vf,
-                   '-r', '25', '-threads', '1', video_path]
+                   '-r', '25', video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=300)
             # Clean up oversized image
             try:
@@ -880,20 +880,20 @@ def create_video_from_image(image_path, video_path, duration, effect='none', sce
                 pass
         else:
             cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
-                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
                    '-pix_fmt', 'yuv420p',
                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-                   '-r', '25', '-threads', '1', video_path]
+                   '-r', '25', video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
     except Exception as e:
         logger.error(f"Video from image failed: {e}")
         # Fallback to static if effects fail
         try:
             cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
-                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-t', str(duration),
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
                    '-pix_fmt', 'yuv420p',
                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-                   '-r', '25', '-threads', '1', video_path]
+                   '-r', '25', video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         except Exception as e2:
             logger.error(f"Static fallback also failed: {e2}")
@@ -911,25 +911,45 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
     work_dir = os.path.dirname(output_path)
     total_clips = len(scene_videos)
 
-    # Normalize all clips to 1920x1080 @ 25fps
-    normalized_clips = []
-    for i, clip in enumerate(scene_videos):
-        clip_progress = 88 + int(3 * i / total_clips)  # 88-91% range
-        emit_progress(session_id, 'compositing', clip_progress, f'Normalizing clip {i+1}/{total_clips}...')
-        logger.info(f"[{session_id[:12]}] Normalizing clip {i+1}/{total_clips}: {os.path.basename(clip)}")
-        norm_path = os.path.join(work_dir, f'norm_{i:04d}.mp4')
+    # Parallel normalize all clips to 1920x1080 @ 25fps using ultrafast
+    NORM_BATCH_SIZE = 5  # 5 concurrent FFmpeg processes
+    normalized_clips = [None] * total_clips
+    norm_completed = [0]  # mutable counter for closure
+
+    def normalize_single_clip(idx):
+        clip = scene_videos[idx]
+        norm_path = os.path.join(work_dir, f'norm_{idx:04d}.mp4')
         try:
             cmd = ['ffmpeg', '-y', '-i', clip,
                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
-                   '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-r', '25', '-pix_fmt', 'yuv420p',
-                   '-threads', '1', norm_path]
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-r', '25', '-pix_fmt', 'yuv420p',
+                   norm_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=120)
-            normalized_clips.append(norm_path)
+            return idx, norm_path
         except Exception as e:
-            logger.warning(f"Normalize failed for clip {i+1}/{total_clips}, using original: {e}")
-            normalized_clips.append(clip)
+            logger.warning(f"Normalize failed for clip {idx+1}/{total_clips}, using original: {e}")
+            return idx, clip
 
-    # Concat all clips
+    logger.info(f"=== NORMALIZE: Parallel normalization of {total_clips} clips (batches of {NORM_BATCH_SIZE}) ===")
+
+    for batch_start in range(0, total_clips, NORM_BATCH_SIZE):
+        batch_end = min(batch_start + NORM_BATCH_SIZE, total_clips)
+        batch_indices = list(range(batch_start, batch_end))
+
+        pool = GeventPool(size=NORM_BATCH_SIZE)
+        batch_results = pool.map(normalize_single_clip, batch_indices)
+
+        for idx, norm_path in batch_results:
+            normalized_clips[idx] = norm_path
+            norm_completed[0] += 1
+
+        clip_progress = 88 + int(3 * norm_completed[0] / total_clips)
+        emit_progress(session_id, 'compositing', clip_progress, f'Normalizing clips ({norm_completed[0]}/{total_clips})...')
+        logger.info(f"Normalize batch: {norm_completed[0]}/{total_clips} complete")
+
+    logger.info(f"=== NORMALIZE COMPLETE: {norm_completed[0]}/{total_clips} clips ===")
+
+    # Concat all clips using stream copy (all clips are now identical format)
     emit_progress(session_id, 'compositing', 91, 'Joining scenes...')
     concat_file = os.path.join(work_dir, 'concat_list.txt')
     with open(concat_file, 'w') as f:
@@ -938,8 +958,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
     temp_video = os.path.join(work_dir, 'concat_video.mp4')
     cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_file,
-           '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-pix_fmt', 'yuv420p', '-r', '25',
-           temp_video]
+           '-c', 'copy', temp_video]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
     # Sync with audio duration
@@ -949,11 +968,11 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
     emit_progress(session_id, 'compositing', 97, 'Adding audio track...')
     if audio_duration:
         cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path,
-               '-c:v', 'libx264', '-preset', 'medium', '-b:v', '5M', '-c:a', 'aac', '-b:a', '192k',
+               '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
                '-map', '0:v:0', '-map', '1:a:0', '-t', str(audio_duration),
-               '-pix_fmt', 'yuv420p', output_path]
+               output_path]
     else:
-        cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+        cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-b:v', '192k',
                '-map', '0:v:0', '-map', '1:a:0', output_path]
     subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
     emit_progress(session_id, 'compositing', 100, 'Final video complete!')
@@ -1031,6 +1050,9 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             total = len(scenes)
 
         # Animation flags per format — enforce from pipeline side
+        logger.info(f"Animation selection for format={video_format}, {len(scenes)} scenes:")
+        for i, scene in enumerate(scenes[:20]):  # Log first 20 scenes' timing
+            logger.info(f"  Scene {i}: start={scene['start_time']:.1f}s, end={scene['end_time']:.1f}s, dur={scene['end_time']-scene['start_time']:.1f}s")
         if video_format == 'pulse':
             # Intro: all scenes before ~30s animated, find natural break
             intro_end = 30.0
@@ -1063,12 +1085,16 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     if diff <= best_diff:
                         best_diff = diff
                         best_idx = i
+                logger.info(f"Flash intro: last_intro_idx={last_intro_idx}, best_idx={best_idx}, best_diff={best_diff:.1f}s")
+                logger.info(f"Flash intro: animating scenes 1 through {best_idx+1} (end_time={scenes[best_idx]['end_time']:.1f}s)")
                 # Force ALL scenes up to best_idx to be animated
                 for i, scene in enumerate(scenes):
                     if i <= best_idx:
                         scene['is_video'] = True  # Mandatory — no exceptions
                     else:
                         scene['is_video'] = False
+            else:
+                logger.warning("Flash intro: No scenes found before 130s cutoff!")
             # Force subject on every scene for flash
             if has_subject:
                 for scene in scenes:
@@ -1236,8 +1262,13 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
         else:
             logger.info("=== PHASE 2 SKIPPED: No scenes require animation ===")
 
-        # ===================== PHASE 3: ASSEMBLE CLIPS =====================
-        for i, scene in enumerate(scenes):
+        # ===================== PHASE 3: ASSEMBLE CLIPS (PARALLEL) =====================
+        CLIP_BATCH_SIZE = 5
+        scene_videos = [None] * len(scenes)
+        clips_completed = [0]
+
+        def assemble_single_clip(i):
+            scene = scenes[i]
             scene_num = scene['scene_number']
             start, end = scene['start_time'], scene['end_time']
             duration = end - start
@@ -1252,13 +1283,13 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
                     try:
                         cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
-                               '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '25',
+                               '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
                                '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-                               '-threads', '1', trimmed]
+                               trimmed]
                         subprocess.run(cmd, check=True, capture_output=True, timeout=120)
-                        scene_videos.append(trimmed)
+                        return i, trimmed
                     except:
-                        scene_videos.append(video_path)
+                        return i, video_path
                 else:
                     logger.error(f"=== ANIMATION DIAGNOSTIC DUMP for scene {scene_num} ===")
                     logger.error(f"  Scene: {scene_num}/{total}, start={start:.1f}s, end={end:.1f}s, duration={duration:.1f}s")
@@ -1268,18 +1299,36 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     logger.error(f"=== END DIAGNOSTIC ===")
                     vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                     create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
-                    scene_videos.append(vid)
+                    return i, vid
             elif is_video and (not image_results[i] or not isinstance(image_results[i], dict)):
                 logger.warning(f"Scene {scene_num} marked is_video=True but image_info invalid — falling back to still")
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
-                scene_videos.append(vid)
+                return i, vid
             else:
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
-                scene_videos.append(vid)
+                return i, vid
 
-            emit_progress(session_id, 'generation', int(85 + 3 * (i+1) / total), f'Assembling clip {i+1}/{total}')
+        logger.info(f"=== PHASE 3: Parallel clip assembly for {total} scenes (batches of {CLIP_BATCH_SIZE}) ===")
+        emit_progress(session_id, 'generation', 85, f'Assembling clips (0/{total})...')
+
+        for batch_start in range(0, len(scenes), CLIP_BATCH_SIZE):
+            batch_end = min(batch_start + CLIP_BATCH_SIZE, len(scenes))
+            batch_indices = list(range(batch_start, batch_end))
+
+            pool = GeventPool(size=CLIP_BATCH_SIZE)
+            batch_results = pool.map(assemble_single_clip, batch_indices)
+
+            for idx, vid_path in batch_results:
+                scene_videos[idx] = vid_path
+                clips_completed[0] += 1
+
+            progress = 85 + (3 * clips_completed[0] / total)
+            emit_progress(session_id, 'generation', int(progress), f'Assembling clips ({clips_completed[0]}/{total})...')
+            logger.info(f"Assembly batch: {clips_completed[0]}/{total} complete")
+
+        logger.info(f"=== PHASE 3 COMPLETE: {clips_completed[0]}/{total} clips assembled ===")
 
         # Compose
         if project_title:

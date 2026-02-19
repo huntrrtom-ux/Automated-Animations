@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hunter Motions</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Exo+2:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" type="image/png" href="/static/img/cog.png">
+</head>
+<body>
+    <!-- Header -->
+    <div class="version-badge">Beta v51</div>
+    <header class="header">
+        <div class="logo">
+            <span class="logo-text">HUNTER <span class="logo-accent">MOTIONS</span></span>
+        </div>
+        <p class="tagline">Voiceover to Visual Story</p>
+
+        <div class="header-controls">
+            <nav class="tab-nav">
+                <button class="tab-btn active" data-tab="create">Create</button>
+                <button class="tab-btn" data-tab="settings">Settings</button>
+            </nav>
+            <button class="theme-toggle-btn" id="theme-toggle" title="Toggle theme">
+                <svg class="icon-sun" viewBox="0 0 20 20" fill="none" width="16" height="16"><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M3.5 3.5l1.4 1.4M15.1 15.1l1.4 1.4M2 10h2M16 10h2M3.5 16.5l1.4-1.4M15.1 4.9l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <svg class="icon-moon" viewBox="0 0 20 20" fill="none" width="16" height="16"><path d="M17 10.5A7 7 0 119.5 3a5.5 5.5 0 007.5 7.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- CREATE TAB -->
+        <div id="tab-create" class="tab-content active">
+
+            <section id="upload-section" class="section">
+                <div class="card upload-card">
+                    <!-- Active Preset Bar -->
+                    <div class="active-preset-bar" id="active-preset-bar">
+                        <div class="preset-bar-empty" id="preset-bar-empty">
+                            <span class="preset-warn">No preset selected</span>
+                            <button class="link-btn" id="go-to-settings">Configure</button>
+                        </div>
+                        <div class="preset-bar-active hidden" id="preset-bar-active">
+                            <div class="preset-bar-info">
+                                <img class="preset-bar-thumb" id="preset-bar-thumb" src="" alt="">
+                                <span class="preset-bar-name" id="preset-bar-name"></span>
+                            </div>
+                            <button class="link-btn" id="change-preset">Change</button>
+                        </div>
+                    </div>
+
+                    <!-- Format Selector -->
+                    <div class="format-selector">
+                        <label>Format <span class="tooltip" data-tip="Choose a production format that controls pacing, animation, and effects.">?</span></label>
+                        <div class="format-cards">
+                            <button class="format-card" data-format="pulse">
+                                <span class="format-icon">⚡</span>
+                                <span class="format-name">Pulse</span>
+                                <span class="format-desc">Fast-paced entertainment</span>
+                            </button>
+                            <button class="format-card" data-format="flash">
+                                <span class="format-icon">🎓</span>
+                                <span class="format-name">Flash</span>
+                                <span class="format-desc">Animated educational</span>
+                            </button>
+                            <button class="format-card" data-format="deep">
+                                <span class="format-icon">📚</span>
+                                <span class="format-name">Deep</span>
+                                <span class="format-desc">Longform educational</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Project Title -->
+                    <div class="option-row">
+                        <div class="form-group" style="width:100%;margin:0">
+                            <label>Project Title <span class="tooltip" data-tip="Used for the output filename. Spaces become underscores, all lowercase.">?</span></label>
+                            <input type="text" id="project-title" class="text-input" placeholder="e.g. my_video_title">
+                        </div>
+                    </div>
+
+                    <div class="upload-zone" id="drop-zone">
+                        <div class="upload-icon-wrap">
+                            <svg viewBox="0 0 48 48" fill="none" class="upload-icon">
+                                <path d="M24 32V12M24 12L16 20M24 12L32 20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <h2 class="upload-title">Drop your voiceover</h2>
+                        <p class="upload-subtitle">MP3, WAV, OGG, FLAC, M4A — up to 500MB</p>
+                        <button class="btn btn-primary" id="browse-btn"><span>Browse Files</span></button>
+                        <input type="file" id="file-input" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac,.webm,.mp4" hidden>
+                    </div>
+
+                    <div class="file-selected hidden" id="file-selected">
+                        <div class="file-info">
+                            <svg class="file-icon" viewBox="0 0 24 24" fill="none" width="22" height="22">
+                                <path d="M9 18V5l12-2v13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <circle cx="6" cy="18" r="3" stroke="currentColor" stroke-width="1.5"/>
+                                <circle cx="18" cy="16" r="3" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            <div>
+                                <p class="file-name" id="file-name"></p>
+                                <p class="file-size" id="file-size"></p>
+                            </div>
+                        </div>
+                        <button class="btn btn-accent" id="generate-btn">
+                            <span class="btn-text">Generate</span>
+                            <svg viewBox="0 0 20 20" fill="none" width="16" height="16"><path d="M4 10h12M10 4l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+
+                    <div class="card-footer">
+                        <span>Whisk token & cookie refresh daily — update in Railway if generation fails.</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Processing Section -->
+            <section id="processing-section" class="section hidden">
+                <div class="card processing-card">
+                    <div class="processing-header">
+                        <h2>Processing</h2>
+                        <p class="processing-meta" id="processing-meta"></p>
+                        <p class="status-msg" id="status-message">Initializing...</p>
+                    </div>
+
+                    <div class="progress-steps">
+                        <div class="step" id="step-transcription" data-step="transcription">
+                            <div class="step-indicator"><div class="step-dot"></div><div class="step-line"></div></div>
+                            <div class="step-content"><h3>Transcription</h3><p>Whisper speech-to-text</p></div>
+                        </div>
+                        <div class="step" id="step-scene_detection" data-step="scene_detection">
+                            <div class="step-indicator"><div class="step-dot"></div><div class="step-line"></div></div>
+                            <div class="step-content"><h3>Scene Detection</h3><p>Story beats & visual cues</p></div>
+                        </div>
+                        <div class="step" id="step-generation" data-step="generation">
+                            <div class="step-indicator"><div class="step-dot"></div><div class="step-line"></div></div>
+                            <div class="step-content"><h3>Visual Generation</h3><p>Illustrations & animations</p></div>
+                        </div>
+                        <div class="step" id="step-compositing" data-step="compositing">
+                            <div class="step-indicator"><div class="step-dot"></div><div class="step-line"></div></div>
+                            <div class="step-content"><h3>Compositing</h3><p>Final video assembly</p></div>
+                        </div>
+                    </div>
+
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar" id="progress-bar"></div>
+                    </div>
+                    <div class="progress-meta">
+                        <span class="progress-text" id="progress-text">0%</span>
+                    </div>
+
+                    <!-- Estimated time remaining -->
+                    <div class="eta-wrap">
+                        <span class="eta-label">Est. time remaining</span>
+                        <span class="eta-value" id="eta-value">Calculating...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Result Section -->
+            <section id="result-section" class="section hidden">
+                <div class="card result-card">
+                    <div class="result-header">
+                        <div class="success-icon">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h2>Video Ready</h2>
+                    </div>
+                    <div class="scene-timeline" id="scene-timeline"></div>
+                    <div class="result-actions">
+                        <a class="btn btn-primary" id="download-btn" href="#" download>
+                            <svg viewBox="0 0 20 20" fill="none" width="16" height="16"><path d="M10 3v10M10 13L5 8M10 13l5-5M3 16h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            <span>Download MP4</span>
+                        </a>
+                        <button class="btn btn-ghost" id="new-btn">New Project</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- SETTINGS TAB -->
+        <div id="tab-settings" class="tab-content">
+            <section class="section">
+                <div class="card">
+                    <h2 class="card-title">Create Preset</h2>
+                    <p class="card-desc">Define your visual style with an image, text description, or both.</p>
+                    <div class="preset-form">
+                        <div class="form-group">
+                            <label>Preset Name</label>
+                            <input type="text" id="preset-name" placeholder="e.g. Family Guy + Dave" class="text-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Tags <span class="tooltip" data-tip="Comma-separated labels to organise presets. e.g. client-a, cartoon, blue">?</span></label>
+                            <input type="text" id="preset-tags" placeholder="e.g. client-a, cartoon, dark" class="text-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Style Description <span class="label-hint">(text prompt for art style)</span></label>
+                            <textarea id="style-text" class="text-input text-area" rows="3" placeholder="e.g. Family Guy cartoon style, thick outlines, flat colors, exaggerated features, comedic expressions"></textarea>
+                        </div>
+                        <div class="image-uploads">
+                            <div class="image-upload-box" id="style-upload-box">
+                                <input type="file" id="style-input" accept=".png,.jpg,.jpeg,.webp" hidden>
+                                <div class="upload-placeholder" id="style-placeholder">
+                                    <svg viewBox="0 0 24 24" fill="none" width="28" height="28"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M3 16l5-5 4 4 3-3 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    <span>Style Image</span>
+                                    <small>Optional if text provided</small>
+                                </div>
+                                <img class="upload-preview hidden" id="style-preview" alt="Style">
+                            </div>
+                            <div class="image-upload-box" id="subject-upload-box">
+                                <input type="file" id="subject-input" accept=".png,.jpg,.jpeg,.webp" hidden>
+                                <div class="upload-placeholder" id="subject-placeholder">
+                                    <svg viewBox="0 0 24 24" fill="none" width="28" height="28"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M20 21c0-4.4-3.6-8-8-8s-8 3.6-8 8" stroke="currentColor" stroke-width="1.5"/></svg>
+                                    <span>Subject</span>
+                                    <small>Optional</small>
+                                </div>
+                                <img class="upload-preview hidden" id="subject-preview" alt="Subject">
+                            </div>
+                        </div>
+                        <p class="form-hint">Provide a style image, text description, or both. Text + image gives the strongest style match.</p>
+                        <button class="btn btn-accent" id="save-preset-btn"><span>Save Preset</span></button>
+                    </div>
+                </div>
+            </section>
+            <section class="section">
+                <div class="card">
+                    <div class="card-header-row">
+                        <h2 class="card-title">Saved Presets</h2>
+                        <div class="preset-io-btns">
+                            <button class="btn btn-ghost btn-sm" id="export-presets-btn">
+                                <svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M10 3v10M10 3L5 8M10 3l5 5M3 16h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                Export
+                            </button>
+                            <button class="btn btn-ghost btn-sm" id="import-presets-btn">
+                                <svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M10 13V3M10 13L5 8M10 13l5-5M3 16h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                Import
+                            </button>
+                            <input type="file" id="import-file-input" accept=".json" hidden>
+                        </div>
+                    </div>
+                    <div class="preset-gallery" id="preset-gallery">
+                        <p class="empty-state" id="no-presets">No presets saved yet</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <p>Whisper · Gemini · Whisk · Veo</p>
+        <button class="link-btn changelog-link" id="open-changelog">What's New · v51</button>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="/static/js/app.js"></script>
+    <div class="toast-container" id="toast-container"></div>
+    <canvas id="confetti-canvas"></canvas>
+
+    <!-- Confirm Generation Modal -->
+    <div class="modal-overlay hidden" id="confirm-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Confirm Generation</h3>
+                <button class="modal-close" id="confirm-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="confirm-subtitle">Please review your settings before starting:</p>
+                <div class="confirm-grid">
+                    <div class="confirm-row">
+                        <span class="confirm-label">Preset</span>
+                        <span class="confirm-value" id="confirm-preset">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Format</span>
+                        <span class="confirm-value" id="confirm-format">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Audio</span>
+                        <span class="confirm-value" id="confirm-audio">—</span>
+                    </div>
+                    <div class="confirm-row">
+                        <span class="confirm-label">Title</span>
+                        <span class="confirm-value" id="confirm-title">—</span>
+                    </div>
+                </div>
+            </div>
+            <div class="confirm-actions">
+                <button class="btn btn-ghost" id="confirm-cancel">Go Back</button>
+                <button class="btn btn-primary" id="confirm-start">Start Generation</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Changelog Modal -->
+    <div class="modal-overlay hidden" id="changelog-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>What's New — v51</h3>
+                <button class="modal-close" id="changelog-close">✕</button>
+            </div>
+            <div class="modal-body" id="changelog-body">
+                <div class="changelog-entry">
+                    <span class="changelog-version">v51 — Latest</span>
+                    <ul class="changelog-list">
+                        <li>3-4x faster video assembly — parallel FFmpeg processing</li>
+                        <li>Ultrafast encoding — same quality, much faster</li>
+                        <li>Eliminated redundant re-encoding on concat and audio merge</li>
+                        <li>Flash intro animation debug logging</li>
+                    </ul>
+                </div>
+                <details class="changelog-history">
+                    <summary>Previous versions</summary>
+                <div class="changelog-entry">
+                    <span class="changelog-version">v50</span>
+                    <ul class="changelog-list">
+                        <li>Batched generation — images 10 at a time, animations 3 at a time</li>
+                        <li>Gemini 2.5 Flash for scene detection (15x cheaper)</li>
+                        <li>Persistent storage — presets survive deployments</li>
+                        <li>Pre-generation confirmation modal</li>
+                    </ul>
+                </div>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v48</span>
+                        <ul class="changelog-list">
+                            <li>Smooth Ken Burns zoom (replaced jittery zoompan)</li>
+                            <li>Flash animation retry loop with diagnostics</li>
+                            <li>Green active preset indicator</li>
+                        </ul>
+                    </div>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v47</span>
+                        <ul class="changelog-list">
+                            <li>ETA display during generation</li>
+                            <li>Per-clip compositing progress</li>
+                            <li>Baby blue light mode</li>
+                        </ul>
+                    </div>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v46</span>
+                        <ul class="changelog-list">
+                            <li>Format system: Pulse, Flash, Deep</li>
+                            <li>Ken Burns effects on still images</li>
+                            <li>No more black bars</li>
+                        </ul>
+                    </div>
+                </details>
+            </div>
+            <button class="btn btn-primary modal-dismiss" id="changelog-dismiss">Got it</button>
+        </div>
+    </div>
+
+    <!-- Completion chime (short pleasant tone) -->
+    <audio id="completion-chime" preload="auto">
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUoGAACAgICAgICAgICAgICAgICA
+gICAgICAgICAgICBgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6yt
+rq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm
+5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/v/+/v38/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi
+4eDf3t3c29rZ2NfW1dTT0tHQz87NzMvKycjHxsXEw8LBwL++vby7urm4t7a1tLOysbCvrq2sq6qp
+qKempaSjoqGgn56dnJuamZiXlpWUk5KRkI+OjYyLiomIh4aFhIOCgYCAgICAgICAgICAgICAgICA" type="audio/wav">
+    </audio>
+</body>
+</html>
