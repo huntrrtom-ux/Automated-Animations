@@ -15,6 +15,7 @@ import base64
 import requests as req
 from PIL import Image
 from io import BytesIO
+from gevent.pool import Pool as GeventPool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1101,45 +1102,147 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             scene_effect = get_scene_effect(video_format, is_video)
 
             logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}, effect={scene_effect}")
-            progress = 30 + (55 * i / total)
-            emit_progress(session_id, 'generation', int(progress), f'Scene {scene_num}/{total}...')
 
+        # ===================== PHASE 1: BATCH IMAGE GENERATION =====================
+        IMAGE_BATCH_SIZE = 10
+        IMAGE_BATCH_PAUSE_EVERY = 20
+        image_results = [None] * len(scenes)
+        images_generated = 0
+
+        def generate_single_image(idx):
+            scene = scenes[idx]
+            scene_num = scene['scene_number']
+            scene_has_subject = scene.get('has_subject', False) and has_subject
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-            image_info = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+            result = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
+            return idx, result
 
-            if image_info == "TOKEN_EXPIRED":
+        logger.info(f"=== PHASE 1: Batch image generation for {total} scenes (batches of {IMAGE_BATCH_SIZE}) ===")
+        emit_progress(session_id, 'generation', 30, f'Generating images (0/{total})...')
+
+        for batch_start in range(0, len(scenes), IMAGE_BATCH_SIZE):
+            batch_end = min(batch_start + IMAGE_BATCH_SIZE, len(scenes))
+            batch_indices = list(range(batch_start, batch_end))
+
+            pool = GeventPool(size=IMAGE_BATCH_SIZE)
+            batch_results = pool.map(generate_single_image, batch_indices)
+
+            token_expired = False
+            for idx, result in batch_results:
+                image_results[idx] = result
+                images_generated += 1
+                if result == "TOKEN_EXPIRED":
+                    token_expired = True
+
+            if token_expired:
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                 return None
 
-            if is_video and image_info and isinstance(image_info, dict):
-                video_path = os.path.join(work_dir, f'scene_{scene_num:04d}_animated.mp4')
-                animated = False
-                max_anim_retries = 5
-                for anim_attempt in range(max_anim_retries):
-                    try:
-                        animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num)
-                    except Exception as e:
-                        logger.error(f"Animation error scene {scene_num} (attempt {anim_attempt+1}/{max_anim_retries}): {e}")
-                        animated = False
-                    if animated == "TOKEN_EXPIRED":
-                        emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
-                        return None
-                    if animated:
-                        break
-                    logger.warning(f"Animation attempt {anim_attempt+1}/{max_anim_retries} FAILED for scene {scene_num} — {'retrying...' if anim_attempt < max_anim_retries - 1 else 'regenerating image and retrying...'}")
-                    emit_progress(session_id, 'generation', int(progress), f'Scene {scene_num}/{total} — animation retry {anim_attempt+1}...')
-                    if anim_attempt < max_anim_retries - 1:
-                        time.sleep(3)
-                    # On last retry, regenerate the image entirely and try one final time
-                    if anim_attempt == max_anim_retries - 2:
-                        logger.info(f"Regenerating image for scene {scene_num} before final animation attempt")
-                        image_info = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
-                        if image_info == "TOKEN_EXPIRED":
-                            emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
-                            return None
+            progress = 30 + (30 * images_generated / total)
+            emit_progress(session_id, 'generation', int(progress), f'Generating images ({images_generated}/{total})...')
+            logger.info(f"Image batch {batch_start//IMAGE_BATCH_SIZE + 1}: {images_generated}/{total} complete")
 
+            # Pause every N images to avoid throttling
+            if images_generated % IMAGE_BATCH_PAUSE_EVERY == 0 and images_generated < len(scenes):
+                logger.info(f"Throttle pause after {images_generated} images (2s)")
+                time.sleep(2)
+
+        logger.info(f"=== PHASE 1 COMPLETE: {images_generated}/{total} images generated ===")
+
+        # ===================== PHASE 2: BATCH ANIMATION (Veo) =====================
+        ANIM_BATCH_SIZE = 3
+        ANIM_BATCH_DELAY = 2
+
+        # Collect scenes that need animation
+        anim_scenes = []
+        for i, scene in enumerate(scenes):
+            if scene.get('is_video', False) and image_results[i] and isinstance(image_results[i], dict):
+                anim_scenes.append(i)
+
+        total_anims = len(anim_scenes)
+        anims_completed = 0
+        anim_results = {}  # idx -> (animated: bool, video_path: str or None)
+
+        def animate_single_scene(idx):
+            scene = scenes[idx]
+            scene_num = scene['scene_number']
+            video_path = os.path.join(work_dir, f'scene_{scene_num:04d}_animated.mp4')
+            image_info = image_results[idx]
+            max_anim_retries = 5
+            animated = False
+
+            for anim_attempt in range(max_anim_retries):
+                try:
+                    animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num)
+                except Exception as e:
+                    logger.error(f"Animation error scene {scene_num} (attempt {anim_attempt+1}/{max_anim_retries}): {e}")
+                    animated = False
+                if animated == "TOKEN_EXPIRED":
+                    return idx, "TOKEN_EXPIRED", None
                 if animated:
+                    break
+                logger.warning(f"Animation attempt {anim_attempt+1}/{max_anim_retries} FAILED for scene {scene_num}")
+                if anim_attempt < max_anim_retries - 1:
+                    time.sleep(3)
+                # On second-to-last retry, regenerate the image
+                if anim_attempt == max_anim_retries - 2:
+                    logger.info(f"Regenerating image for scene {scene_num} before final animation attempt")
+                    scene_has_subject = scene.get('has_subject', False) and has_subject
+                    img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+                    new_image = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                    if new_image == "TOKEN_EXPIRED":
+                        return idx, "TOKEN_EXPIRED", None
+                    if new_image and isinstance(new_image, dict):
+                        image_results[idx] = new_image
+
+            return idx, animated, video_path if animated else None
+
+        if total_anims > 0:
+            logger.info(f"=== PHASE 2: Batch animation for {total_anims} scenes (batches of {ANIM_BATCH_SIZE}) ===")
+            emit_progress(session_id, 'generation', 60, f'Animating scenes (0/{total_anims})...')
+
+            for batch_start in range(0, total_anims, ANIM_BATCH_SIZE):
+                batch_end = min(batch_start + ANIM_BATCH_SIZE, total_anims)
+                batch_indices = [anim_scenes[j] for j in range(batch_start, batch_end)]
+
+                pool = GeventPool(size=ANIM_BATCH_SIZE)
+                batch_results = pool.map(animate_single_scene, batch_indices)
+
+                token_expired = False
+                for idx, animated, video_path in batch_results:
+                    anim_results[idx] = (animated, video_path)
+                    anims_completed += 1
+                    if animated == "TOKEN_EXPIRED":
+                        token_expired = True
+
+                if token_expired:
+                    emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                    return None
+
+                progress = 60 + (25 * anims_completed / total_anims)
+                emit_progress(session_id, 'generation', int(progress), f'Animating scenes ({anims_completed}/{total_anims})...')
+                logger.info(f"Animation batch {batch_start//ANIM_BATCH_SIZE + 1}: {anims_completed}/{total_anims} complete")
+
+                if batch_end < total_anims:
+                    time.sleep(ANIM_BATCH_DELAY)
+
+            logger.info(f"=== PHASE 2 COMPLETE: {anims_completed}/{total_anims} animations ===")
+        else:
+            logger.info("=== PHASE 2 SKIPPED: No scenes require animation ===")
+
+        # ===================== PHASE 3: ASSEMBLE CLIPS =====================
+        for i, scene in enumerate(scenes):
+            scene_num = scene['scene_number']
+            start, end = scene['start_time'], scene['end_time']
+            duration = end - start
+            is_video = scene.get('is_video', False)
+            scene_effect = get_scene_effect(video_format, is_video)
+            img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+
+            if i in anim_results:
+                animated, video_path = anim_results[i]
+                if animated and video_path:
                     add_credits(2, f'Animation (Veo) — scene {scene_num}', session_id)
                     trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
                     try:
@@ -1154,15 +1257,15 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 else:
                     logger.error(f"=== ANIMATION DIAGNOSTIC DUMP for scene {scene_num} ===")
                     logger.error(f"  Scene: {scene_num}/{total}, start={start:.1f}s, end={end:.1f}s, duration={duration:.1f}s")
-                    logger.error(f"  is_video={is_video}, has_subject={scene_has_subject}, format={video_format}")
-                    logger.error(f"  image_info type={type(image_info).__name__}, media_id={image_info.get('media_id', 'none') if isinstance(image_info, dict) else 'N/A'}")
-                    logger.error(f"  All {max_anim_retries} animation attempts FAILED — falling back to still image")
+                    logger.error(f"  is_video={is_video}, format={video_format}")
+                    logger.error(f"  image_info type={type(image_results[i]).__name__}, media_id={image_results[i].get('media_id', 'none') if isinstance(image_results[i], dict) else 'N/A'}")
+                    logger.error(f"  All animation attempts FAILED — falling back to still image")
                     logger.error(f"=== END DIAGNOSTIC ===")
                     vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                     create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                     scene_videos.append(vid)
-            elif is_video and (not image_info or not isinstance(image_info, dict)):
-                logger.warning(f"Scene {scene_num} marked is_video=True but image_info invalid (type={type(image_info).__name__}) — falling back to still")
+            elif is_video and (not image_results[i] or not isinstance(image_results[i], dict)):
+                logger.warning(f"Scene {scene_num} marked is_video=True but image_info invalid — falling back to still")
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                 scene_videos.append(vid)
@@ -1171,7 +1274,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                 scene_videos.append(vid)
 
-            emit_progress(session_id, 'generation', int(30 + 55 * (i+1) / total), f'Scene {scene_num}/{total} done')
+            emit_progress(session_id, 'generation', int(85 + 3 * (i+1) / total), f'Assembling clip {i+1}/{total}')
 
         # Compose
         if project_title:
