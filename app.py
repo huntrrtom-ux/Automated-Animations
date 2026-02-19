@@ -1049,6 +1049,32 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             scenes = filled_scenes
             total = len(scenes)
 
+        # Split any scene that's too long into equal sub-scenes
+        MAX_SCENE_DUR = 15.0  # No scene should be longer than 15s
+        split_scenes = []
+        for scene in scenes:
+            dur = scene['end_time'] - scene['start_time']
+            if dur > MAX_SCENE_DUR:
+                # Split into sub-scenes of ~10s each
+                num_splits = math.ceil(dur / 10.0)
+                sub_dur = dur / num_splits
+                logger.info(f"Splitting scene {scene.get('scene_number', '?')} ({dur:.1f}s) into {num_splits} sub-scenes of {sub_dur:.1f}s")
+                for j in range(num_splits):
+                    sub_scene = dict(scene)  # shallow copy
+                    sub_scene['start_time'] = scene['start_time'] + j * sub_dur
+                    sub_scene['end_time'] = scene['start_time'] + (j + 1) * sub_dur
+                    split_scenes.append(sub_scene)
+            else:
+                split_scenes.append(scene)
+        if len(split_scenes) != len(scenes):
+            logger.info(f"Split long scenes: {len(scenes)} -> {len(split_scenes)} scenes")
+        scenes = split_scenes
+
+        # Re-renumber after split
+        for i, scene in enumerate(scenes):
+            scene['scene_number'] = i + 1
+        total = len(scenes)
+
         # Animation flags per format — enforce from pipeline side
         logger.info(f"Animation selection for format={video_format}, {len(scenes)} scenes:")
         for i, scene in enumerate(scenes[:20]):  # Log first 20 scenes' timing
