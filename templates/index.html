@@ -251,8 +251,8 @@
     </main>
 
     <footer class="footer">
-        <p>Whisper · GPT-4o · Whisk · Veo</p>
-        <button class="link-btn changelog-link" id="open-changelog">What's New</button>
+        <p>Whisper · Gemini · Whisk · Veo</p>
+        <button class="link-btn changelog-link" id="open-changelog">What's New · v50</button>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
@@ -299,57 +299,47 @@
     <div class="modal-overlay hidden" id="changelog-overlay">
         <div class="modal">
             <div class="modal-header">
-                <h3>What's New</h3>
+                <h3>What's New — v50</h3>
                 <button class="modal-close" id="changelog-close">✕</button>
             </div>
             <div class="modal-body" id="changelog-body">
                 <div class="changelog-entry">
-                    <span class="changelog-version">v50</span>
+                    <span class="changelog-version">v50 — Latest</span>
                     <ul class="changelog-list">
                         <li>Batched generation — images 10 at a time, animations 3 at a time</li>
                         <li>Generation time reduced from 60-90 mins to ~15-25 mins</li>
-                        <li>Three-phase pipeline: batch images → batch animations → assemble</li>
+                        <li>Gemini 2.5 Flash for scene detection (15x cheaper)</li>
+                        <li>Persistent storage — presets survive deployments</li>
+                        <li>Pre-generation confirmation modal</li>
                     </ul>
                 </div>
-                <div class="changelog-entry">
-                    <span class="changelog-version">v49</span>
-                    <ul class="changelog-list">
-                        <li>Gemini 2.5 Flash integration for scene detection (15x cheaper)</li>
-                        <li>Falls back to GPT-4o if no Gemini key set</li>
-                        <li>Whisper remains on OpenAI for transcription</li>
-                    </ul>
-                </div>
-                <div class="changelog-entry">
-                    <span class="changelog-version">v48</span>
-                    <ul class="changelog-list">
-                        <li>Pre-generation confirmation modal — review settings before starting</li>
-                        <li>Smooth Ken Burns zoom (replaced jittery zoompan with scale+crop)</li>
-                        <li>Flash animation retry loop with diagnostic logging</li>
-                        <li>Flash intro scenes forced to animate (up to 2 min)</li>
-                        <li>Removed slow zoom from Flash format — still images only</li>
-                        <li>Green active preset indicator</li>
-                    </ul>
-                </div>
-                <div class="changelog-entry">
-                    <span class="changelog-version">v47</span>
-                    <ul class="changelog-list">
-                        <li>ETA display — estimated time remaining during generation</li>
-                        <li>Per-clip compositing progress in logs and UI</li>
-                        <li>Baby blue light mode (replaced bright white)</li>
-                    </ul>
-                </div>
-                <div class="changelog-entry">
-                    <span class="changelog-version">v46</span>
-                    <ul class="changelog-list">
-                        <li>New format system: Pulse, Flash, Deep — replacing the animation toggle</li>
-                        <li>Ken Burns effects — slow pan/zoom on still images (Pulse & Flash)</li>
-                        <li>Format-specific pacing, scene durations, and animation rules</li>
-                        <li>Per-format character rules (every scene, sparingly, or AI-decided)</li>
-                        <li>No more black bars — scale-to-fill with crop on all scenes</li>
-                        <li>Processing time tracked in admin dashboard</li>
-                        <li>Beta version badge in top-right corner</li>
-                    </ul>
-                </div>
+                <details class="changelog-history">
+                    <summary>Previous versions</summary>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v48</span>
+                        <ul class="changelog-list">
+                            <li>Smooth Ken Burns zoom (replaced jittery zoompan)</li>
+                            <li>Flash animation retry loop with diagnostics</li>
+                            <li>Green active preset indicator</li>
+                        </ul>
+                    </div>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v47</span>
+                        <ul class="changelog-list">
+                            <li>ETA display during generation</li>
+                            <li>Per-clip compositing progress</li>
+                            <li>Baby blue light mode</li>
+                        </ul>
+                    </div>
+                    <div class="changelog-entry">
+                        <span class="changelog-version">v46</span>
+                        <ul class="changelog-list">
+                            <li>Format system: Pulse, Flash, Deep</li>
+                            <li>Ken Burns effects on still images</li>
+                            <li>No more black bars</li>
+                        </ul>
+                    </div>
+                </details>
             </div>
             <button class="btn btn-primary modal-dismiss" id="changelog-dismiss">Got it</button>
         </div>

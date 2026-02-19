@@ -534,18 +534,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const CHANGELOG_VERSION = 'v50';
     const changelogOverlay = document.getElementById('changelog-overlay');
     document.getElementById('open-changelog').addEventListener('click', () => changelogOverlay.classList.remove('hidden'));
-    document.getElementById('changelog-close').addEventListener('click', () => {
-        changelogOverlay.classList.add('hidden');
-        localStorage.setItem('lastSeenChangelog', CHANGELOG_VERSION);
-    });
-    document.getElementById('changelog-dismiss').addEventListener('click', () => {
-        changelogOverlay.classList.add('hidden');
-        localStorage.setItem('lastSeenChangelog', CHANGELOG_VERSION);
-    });
-    // Show changelog on first visit after update
-    if (localStorage.getItem('lastSeenChangelog') !== CHANGELOG_VERSION) {
-        setTimeout(() => changelogOverlay.classList.remove('hidden'), 1000);
-    }
+    document.getElementById('changelog-close').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
+    document.getElementById('changelog-dismiss').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
 
     // Preset tags
     const presetTagsInput = document.getElementById('preset-tags');
