@@ -33,6 +33,7 @@ os.makedirs(app.config['PRESET_FOLDER'], exist_ok=True)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'webm', 'mp4'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -290,7 +291,18 @@ def get_format_subject_rules(video_format, has_subject):
 
 def detect_scene_changes(transcript_data, session_id, has_subject=False, video_format='pulse', audio_duration=0):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
-    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    # Use Gemini via OpenAI-compatible endpoint (cheaper + higher rate limits)
+    if GEMINI_API_KEY:
+        client = openai.OpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        scene_model = "gemini-2.5-flash"
+        logger.info("Scene detection using Gemini 2.5 Flash")
+    else:
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        scene_model = "gpt-4o"
+        logger.info("Scene detection using GPT-4o (no GEMINI_API_KEY set)")
     segments = transcript_data['segments']
     CHUNK_SIZE = 100
     all_scenes = []
@@ -307,7 +319,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         segments_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in chunk_segments])
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=scene_model,
             messages=[
                 {"role": "system", "content": (
                     "You are a visual director creating scene breakdowns for an illustrated video.\n\n"
@@ -1461,7 +1473,7 @@ def version():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY),
+    return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY), 'gemini': bool(GEMINI_API_KEY),
                     'whisk_token': bool(get_whisk_token()), 'whisk_cookie': bool(get_whisk_cookie())})
 
 if __name__ == '__main__':
