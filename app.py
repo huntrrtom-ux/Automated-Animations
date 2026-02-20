@@ -212,10 +212,14 @@ def get_format_scene_rules(video_format, audio_duration):
             "BODY (after intro):\n"
             "- ALL body scenes must have is_video: false\n"
             "- Scene durations: 2-6 seconds — keep it fast-paced\n"
+            "- ABSOLUTE MAXIMUM: No single scene may exceed 10 seconds under any circumstances\n"
             "- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every 10-minute mark "
             "(can be anywhere within ±30 seconds of each 10-min mark)\n"
-            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
-            "- The LAST scene's end_time MUST equal the final timestamp\n"
+            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
+            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     elif video_format == 'flash':
         return (
@@ -227,9 +231,13 @@ def get_format_scene_rules(video_format, audio_duration):
             "BODY (after intro):\n"
             "- ALL body scenes must have is_video: false\n"
             "- Scene durations: 5-15 seconds depending on content\n"
+            "- ABSOLUTE MAXIMUM: No single scene may exceed 15 seconds under any circumstances\n"
             "- NO animated scenes after intro\n"
-            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
-            "- The LAST scene's end_time MUST equal the final timestamp\n"
+            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
+            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     elif video_format == 'deep':
         mid_point = audio_duration / 2 if audio_duration else 1800
@@ -245,9 +253,13 @@ def get_format_scene_rules(video_format, audio_duration):
             "- All is_video: false\n\n"
             f"SECOND HALF (~{mid_point:.0f}s to end):\n"
             "- Scene durations: 8-15 seconds, more relaxed pacing\n"
+            "- ABSOLUTE MAXIMUM: No single scene may exceed 15 seconds under any circumstances\n"
             "- All is_video: false\n\n"
-            "- CRITICAL: Cover the ENTIRE duration with NO gaps\n"
-            "- The LAST scene's end_time MUST equal the final timestamp\n"
+            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
+            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     return ""
 
@@ -340,11 +352,11 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                     "- The art style is handled separately — only describe CONTENT\n"
                     "- Focus on WHAT is happening: actions, emotions, poses, gestures, environments\n"
                     "- Describe settings richly: objects, lighting, color mood, atmosphere, camera angle\n"
-                    "- NEVER include ANY text, words, numbers, labels, or signs in scene descriptions\n"
+                    "- NEVER include ANY text, words, numbers, labels, signs, letters, titles, or captions in scene descriptions\n"
                     "- NEVER include dollar amounts like '$40,000' — instead show VISUAL metaphors (mountains of cash, overflowing vaults)\n"
                     "- NEVER include charts, graphs, statistics, percentages, or data visualizations\n"
+                    "- NEVER describe text appearing on any surface — no signs, no labels, no writing of any kind\n"
                     "- Represent ALL concepts visually: money = piles of bills/coins, debt = chains/weights, profit = golden glow/treasure\n"
-                    "- The ONLY exception: a single word on a building like 'BANK' — and even this should be rare\n"
                     "- Limit 1-3 characters per scene\n\n"
                     "Return valid JSON only, no markdown:\n"
                     '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 5.0, '
@@ -1049,20 +1061,32 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             scenes = filled_scenes
             total = len(scenes)
 
-        # Split any scene that's too long into equal sub-scenes
+        # Split any scene that's too long into sub-scenes with UNIQUE descriptions
         MAX_SCENE_DUR = 15.0  # No scene should be longer than 15s
         split_scenes = []
+        segments = transcript_data['segments']
         for scene in scenes:
             dur = scene['end_time'] - scene['start_time']
             if dur > MAX_SCENE_DUR:
-                # Split into sub-scenes of ~10s each
                 num_splits = math.ceil(dur / 10.0)
                 sub_dur = dur / num_splits
                 logger.info(f"Splitting scene {scene.get('scene_number', '?')} ({dur:.1f}s) into {num_splits} sub-scenes of {sub_dur:.1f}s")
+                
                 for j in range(num_splits):
-                    sub_scene = dict(scene)  # shallow copy
-                    sub_scene['start_time'] = scene['start_time'] + j * sub_dur
-                    sub_scene['end_time'] = scene['start_time'] + (j + 1) * sub_dur
+                    sub_start = scene['start_time'] + j * sub_dur
+                    sub_end = scene['start_time'] + (j + 1) * sub_dur
+                    
+                    # Find transcript segments that overlap with this sub-scene
+                    sub_segments = [s for s in segments if s['end'] > sub_start and s['start'] < sub_end]
+                    sub_text = ' '.join(s['text'] for s in sub_segments).strip()
+                    
+                    sub_scene = dict(scene)
+                    sub_scene['start_time'] = sub_start
+                    sub_scene['end_time'] = sub_end
+                    # Create a unique description from the transcript content
+                    if sub_text:
+                        sub_scene['visual_description'] = scene['visual_description'] + f" [Scene focus: {sub_text}]"
+                        sub_scene['narration_summary'] = sub_text[:100]
                     split_scenes.append(sub_scene)
             else:
                 split_scenes.append(scene)
