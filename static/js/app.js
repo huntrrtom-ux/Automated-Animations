@@ -284,24 +284,144 @@ document.addEventListener('DOMContentLoaded', () => {
         processingSection.classList.add('hidden');
         resultSection.classList.remove('hidden');
         downloadBtn.href = data.video_url;
+        currentSessionId = data.session_id || currentSessionId;
+        
+        // Setup video preview
+        const videoPreview = document.getElementById('video-preview');
+        videoPreview.src = data.video_url;
+        
+        // Store scenes globally for regeneration
+        window._currentScenes = data.scenes || [];
+        
         sceneTimeline.innerHTML = '';
         if (data.scenes && data.scenes.length) {
             data.scenes.forEach(scene => {
                 const isVideo = scene.is_video;
                 const item = document.createElement('div');
-                item.className = 'scene-item';
+                item.className = 'scene-item scene-item-interactive';
+                item.dataset.sceneNum = scene.scene_number;
+                item.dataset.startTime = scene.start_time;
                 item.innerHTML = `
-                    <div class="scene-badge ${isVideo ? 'video' : 'image'}">${scene.scene_number}</div>
-                    <div style="flex:1;min-width:0">
-                        <div class="scene-time">${fmtTime(scene.start_time)} — ${fmtTime(scene.end_time)}</div>
-                        <div class="scene-desc">${escHtml(scene.visual_description)}</div>
+                    <div class="scene-thumb-col">
+                        <img class="scene-thumb" src="/scene-image/${currentSessionId}/${scene.scene_number}" 
+                             alt="Scene ${scene.scene_number}" onerror="this.style.display='none'" />
+                        <div class="scene-badge ${isVideo ? 'video' : 'image'}">${scene.scene_number}</div>
                     </div>
-                    <span class="scene-type-tag ${isVideo ? 'video' : 'image'}">${isVideo ? 'Veo' : 'Imagen'}</span>
+                    <div class="scene-info-col">
+                        <div class="scene-time">${fmtTime(scene.start_time)} — ${fmtTime(scene.end_time)}</div>
+                        <div class="scene-desc">${escHtml(scene.visual_description).substring(0, 120)}${scene.visual_description.length > 120 ? '...' : ''}</div>
+                    </div>
+                    <div class="scene-actions-col">
+                        <span class="scene-type-tag ${isVideo ? 'video' : 'image'}">${isVideo ? 'Veo' : 'Imagen'}</span>
+                        <button class="btn-regen" title="Regenerate this scene" data-scene="${scene.scene_number}">
+                            <svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M3 10a7 7 0 0113.07-3.5M17 10a7 7 0 01-13.07 3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M16 3v4h-4M4 17v-4h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
                 `;
+                // Click scene to seek video
+                item.addEventListener('click', (e) => {
+                    if (e.target.closest('.btn-regen')) return;
+                    videoPreview.currentTime = scene.start_time;
+                    videoPreview.play();
+                    document.querySelectorAll('.scene-item-interactive').forEach(s => s.classList.remove('scene-active'));
+                    item.classList.add('scene-active');
+                });
                 sceneTimeline.appendChild(item);
+            });
+            
+            // Highlight current scene during playback
+            videoPreview.addEventListener('timeupdate', () => {
+                const t = videoPreview.currentTime;
+                document.querySelectorAll('.scene-item-interactive').forEach(item => {
+                    const start = parseFloat(item.dataset.startTime);
+                    const sceneData = window._currentScenes.find(s => s.scene_number == item.dataset.sceneNum);
+                    if (sceneData && t >= sceneData.start_time && t < sceneData.end_time) {
+                        item.classList.add('scene-active');
+                    } else {
+                        item.classList.remove('scene-active');
+                    }
+                });
             });
         }
     }
+    
+    // Regenerate scene handlers
+    document.addEventListener('click', (e) => {
+        const regenBtn = e.target.closest('.btn-regen');
+        if (!regenBtn) return;
+        const sceneNum = parseInt(regenBtn.dataset.scene);
+        const scene = window._currentScenes.find(s => s.scene_number === sceneNum);
+        if (!scene) return;
+        
+        document.getElementById('regen-scene-num').textContent = sceneNum;
+        document.getElementById('regen-time').textContent = `${fmtTime(scene.start_time)} — ${fmtTime(scene.end_time)}`;
+        document.getElementById('regen-prompt').value = scene.visual_description;
+        const img = document.getElementById('regen-current-img');
+        img.src = `/scene-image/${currentSessionId}/${sceneNum}`;
+        img.style.display = 'block';
+        document.getElementById('regen-status').classList.add('hidden');
+        document.getElementById('regen-submit').disabled = false;
+        document.getElementById('regen-submit').querySelector('.btn-text').textContent = 'Regenerate';
+        document.getElementById('regen-overlay').classList.remove('hidden');
+    });
+    
+    document.getElementById('regen-close').addEventListener('click', () => document.getElementById('regen-overlay').classList.add('hidden'));
+    document.getElementById('regen-cancel').addEventListener('click', () => document.getElementById('regen-overlay').classList.add('hidden'));
+    
+    document.getElementById('regen-submit').addEventListener('click', async () => {
+        const sceneNum = parseInt(document.getElementById('regen-scene-num').textContent);
+        const customPrompt = document.getElementById('regen-prompt').value.trim();
+        const submitBtn = document.getElementById('regen-submit');
+        const status = document.getElementById('regen-status');
+        
+        submitBtn.disabled = true;
+        submitBtn.querySelector('.btn-text').textContent = 'Regenerating...';
+        status.textContent = 'Generating new image...';
+        status.classList.remove('hidden');
+        
+        try {
+            const resp = await fetch('/api/regenerate-scene', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    scene_number: sceneNum,
+                    custom_prompt: customPrompt
+                })
+            });
+            const result = await resp.json();
+            
+            if (result.success) {
+                status.textContent = 'Scene regenerated! Reloading...';
+                // Update scenes
+                window._currentScenes = result.scenes;
+                // Refresh video and scene list
+                const videoPreview = document.getElementById('video-preview');
+                const currentTime = videoPreview.currentTime;
+                videoPreview.src = result.video_url + '?t=' + Date.now();
+                videoPreview.currentTime = currentTime;
+                // Update scene thumbnail
+                const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-thumb`);
+                if (thumb) thumb.src = result.image_url + '?t=' + Date.now();
+                // Update scene desc
+                const descEl = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-desc`);
+                if (descEl) descEl.textContent = customPrompt.substring(0, 120) + (customPrompt.length > 120 ? '...' : '');
+                // Update current image preview
+                document.getElementById('regen-current-img').src = result.image_url + '?t=' + Date.now();
+                
+                showToast('Scene regenerated successfully!', 'success');
+                setTimeout(() => document.getElementById('regen-overlay').classList.add('hidden'), 1500);
+            } else {
+                status.textContent = 'Error: ' + (result.error || 'Unknown error');
+                submitBtn.disabled = false;
+                submitBtn.querySelector('.btn-text').textContent = 'Retry';
+            }
+        } catch (err) {
+            status.textContent = 'Network error — please try again';
+            submitBtn.disabled = false;
+            submitBtn.querySelector('.btn-text').textContent = 'Retry';
+        }
+    });
 
     function fmtTime(s) { return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`; }
     function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }

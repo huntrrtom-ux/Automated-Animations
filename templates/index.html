@@ -170,6 +170,15 @@
                         </div>
                         <h2>Video Ready</h2>
                     </div>
+                    <!-- Video Preview Player -->
+                    <div class="video-preview-container">
+                        <video id="video-preview" controls preload="metadata" playsinline></video>
+                    </div>
+                    <!-- Scene Editor -->
+                    <div class="scene-editor-header">
+                        <h3>Scene Editor</h3>
+                        <span class="scene-editor-hint">Click a scene to preview · Regenerate scenes you don't like</span>
+                    </div>
                     <div class="scene-timeline" id="scene-timeline"></div>
                     <div class="result-actions">
                         <a class="btn btn-primary" id="download-btn" href="#" download>
@@ -177,6 +186,24 @@
                             <span>Download MP4</span>
                         </a>
                         <button class="btn btn-ghost" id="new-btn">New Project</button>
+                    </div>
+                </div>
+                <!-- Regenerate Modal -->
+                <div id="regen-overlay" class="modal-overlay hidden">
+                    <div class="modal-card" style="max-width:560px">
+                        <button class="modal-close" id="regen-close">&times;</button>
+                        <h3 style="margin-bottom:8px">Regenerate Scene <span id="regen-scene-num"></span></h3>
+                        <p class="scene-time" id="regen-time" style="margin-bottom:12px"></p>
+                        <img id="regen-current-img" class="regen-preview-img" alt="Current scene" />
+                        <label style="font-size:13px;font-weight:600;margin-bottom:4px;display:block">Image Prompt</label>
+                        <textarea id="regen-prompt" rows="4" class="regen-textarea"></textarea>
+                        <div style="display:flex;gap:8px;margin-top:12px">
+                            <button class="btn btn-primary" id="regen-submit" style="flex:1">
+                                <span class="btn-text">Regenerate</span>
+                            </button>
+                            <button class="btn btn-ghost" id="regen-cancel">Cancel</button>
+                        </div>
+                        <div id="regen-status" class="regen-status hidden"></div>
                     </div>
                 </div>
             </section>

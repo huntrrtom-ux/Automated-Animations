@@ -342,7 +342,8 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         scene_model = "gpt-4o"
         logger.info("Scene detection using GPT-4o (no GEMINI_API_KEY set)")
     segments = transcript_data['segments']
-    CHUNK_SIZE = 100
+    # FIX 1: Smaller chunks — 50 segments (~3-4 min) so Gemini can't skip sections
+    CHUNK_SIZE = 50
     all_scenes = []
 
     format_rules = get_format_scene_rules(video_format, audio_duration)
@@ -356,57 +357,68 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                      f'Analyzing section {chunk_num}/{total_chunks}...')
         segments_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in chunk_segments])
 
+        # FIX 3: Calculate chunk time range so Gemini knows exactly what to cover
+        chunk_time_start = chunk_segments[0]['start']
+        chunk_time_end = chunk_segments[-1]['end']
+        chunk_duration = chunk_time_end - chunk_time_start
+        is_last_chunk = chunk_num == total_chunks
+
+        system_prompt = (
+            "You are a visual director creating scene breakdowns for an illustrated video.\n\n"
+            "YOUR CORE TASK:\n"
+            "Read through the transcript line by line. Every time the narrator moves to a new idea, "
+            "concept, example, or subject — that's a new scene with its own unique visual. "
+            "Each scene should last 5-15 seconds based on how long the narrator spends on that point.\n\n"
+            "HOW TO CREATE SCENES:\n"
+            "1. Read each line of the transcript\n"
+            "2. When the narrator changes topic or moves to a new point, start a new scene\n"
+            "3. Each scene's visual_description is a UNIQUE IMAGE PROMPT — it illustrates ONLY what the "
+            "narrator says during those specific seconds, nothing else\n"
+            "4. Scenes don't need to relate to each other — each one is a standalone visual for that moment\n"
+            "5. Short points = short scenes (5-7s). Detailed explanations = longer scenes (10-15s)\n"
+            f"6. You MUST create scenes covering from {chunk_time_start:.1f}s to {chunk_time_end:.1f}s with NO gaps\n\n"
+            "SCENE VISUAL DESCRIPTION RULES:\n"
+            "- Each visual_description is an IMAGE PROMPT — it must paint a specific, vivid picture\n"
+            "- Every scene MUST look DIFFERENT — different setting, action, composition, mood, camera angle\n"
+            "- Base each scene's visual ONLY on what the narrator says during those seconds\n"
+            "- Use metaphorical visuals for abstract concepts: money = piles of coins/bills, debt = heavy chains, "
+            "growth = rising stairs, risk = stormy skies, success = golden light\n"
+            "- Describe: camera angle, lighting, mood, character emotions/poses, environment details, props\n"
+            f"{subject_note}\n"
+            "FORBIDDEN IN VISUAL DESCRIPTIONS:\n"
+            "- NO text, words, numbers, labels, signs, letters, titles, captions, or writing anywhere\n"
+            "- NO dollar amounts, percentages, statistics, charts, graphs, or data\n"
+            "- NO art style words: 'cartoon', 'animated', 'illustrated', 'drawn', 'realistic', '3D'\n"
+            "- The art style is controlled separately — only describe scene CONTENT\n\n"
+            "TIMING RULES:\n"
+            f"- Your scenes MUST start at {chunk_time_start:.1f}s and end at {chunk_time_end:.1f}s\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time (no gaps)\n"
+            "- Vary durations: 5s, 7s, 10s, 12s — match the pacing of the speech\n"
+            "- NEVER exceed 15 seconds for any single scene\n"
+            "- NEVER create a scene shorter than 3 seconds\n\n"
+            "Return valid JSON only, no markdown:\n"
+            '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 7.5, '
+            '"narration_summary": "what narrator says", "visual_description": "unique image prompt for this scene only", '
+            '"has_subject": true, "is_video": false}]}\n\n'
+            f"{format_rules}"
+        )
+
+        user_msg = (
+            f"Total audio duration: {audio_duration:.1f} seconds\n"
+            f"This is section {chunk_num} of {total_chunks}, covering {chunk_time_start:.1f}s to {chunk_time_end:.1f}s.\n"
+        )
+        if is_last_chunk:
+            user_msg += f"IMPORTANT: This is the LAST section — your final scene's end_time MUST reach {chunk_time_end:.1f}s.\n"
+        user_msg += f"\nTranscript:\n\n{segments_text}"
+
+        # FIX 2: Higher max_tokens (32000) + FIX 5: Lower temperature (0.4) for consistency
         response = client.chat.completions.create(
             model=scene_model,
             messages=[
-                {"role": "system", "content": (
-                    "You are a visual director creating scene breakdowns for an illustrated video.\n\n"
-                    "YOUR CORE TASK:\n"
-                    "Read through the transcript and create a NEW scene every 5-15 seconds of speech. "
-                    "Each scene's visual_description must be a UNIQUE image prompt that illustrates SPECIFICALLY "
-                    "what the narrator is talking about in that time window. Think of it as: every time the narrator "
-                    "moves to a new point, idea, or example, that's a new scene with a completely new visual.\n\n"
-                    "HOW TO CREATE SCENES:\n"
-                    "1. Read the transcript segment by segment\n"
-                    "2. Group 1-3 consecutive segments (5-15 seconds of speech) into one scene\n"
-                    "3. Write a visual_description that is a UNIQUE IMAGE PROMPT for that scene — it must visually "
-                    "represent what the narrator says in those specific seconds\n"
-                    "4. Move to the next group of segments and create a completely DIFFERENT scene\n"
-                    "5. Continue until the entire transcript is covered with no gaps\n\n"
-                    "SCENE VISUAL DESCRIPTION RULES:\n"
-                    "- Each visual_description is an IMAGE PROMPT — it must paint a specific, vivid picture\n"
-                    "- Every scene MUST look DIFFERENT from every other scene — different setting, action, composition, mood\n"
-                    "- Base each scene's visual on the SPECIFIC words the narrator speaks during that time window\n"
-                    "- If the narrator talks about 'buying a house' in one scene and 'paying taxes' in the next, those are TWO completely different visuals\n"
-                    "- Use metaphorical visuals for abstract concepts: money = piles of coins/bills, debt = heavy chains, growth = rising stairs, risk = stormy skies\n"
-                    "- Describe: camera angle, lighting, mood, character emotions/poses, environment details, props\n"
-                    f"{subject_note}\n"
-                    "FORBIDDEN IN VISUAL DESCRIPTIONS:\n"
-                    "- NO text, words, numbers, labels, signs, letters, titles, captions, writing, or any readable content anywhere in the scene\n"
-                    "- NO dollar amounts, percentages, statistics, charts, graphs, or data\n"
-                    "- NO art style words: 'cartoon', 'animated', 'illustrated', 'drawn', 'realistic', '3D'\n"
-                    "- The art style is controlled separately — only describe scene CONTENT\n\n"
-                    "TIMING RULES:\n"
-                    "- Each scene's start_time MUST equal the previous scene's end_time (no gaps)\n"
-                    "- The first scene MUST start at 0.0\n"
-                    "- The last scene's end_time MUST equal the final transcript timestamp\n"
-                    "- Vary durations naturally: some 5s, some 8s, some 12s — match the pacing of the speech\n"
-                    "- Quick points = shorter scenes (5-7s), detailed explanations = longer scenes (10-15s)\n"
-                    "- NEVER exceed 15 seconds for any single scene\n\n"
-                    "Return valid JSON only, no markdown:\n"
-                    '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 7.5, '
-                    '"narration_summary": "what narrator says", "visual_description": "unique image prompt for this scene only", '
-                    '"has_subject": true, "is_video": false}]}\n\n'
-                    f"{format_rules}"
-                )},
-                {"role": "user", "content": (
-                    f"Total audio duration: {audio_duration:.1f} seconds\n"
-                    f"This is section {chunk_num} of {total_chunks}.\n"
-                    f"{'IMPORTANT: This is the LAST section — your final scene end_time MUST reach ' + f'{audio_duration:.1f}s to cover the full audio.' if chunk_num == total_chunks else ''}\n\n"
-                    f"Transcript:\n\n{segments_text}"
-                )}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg}
             ],
-            temperature=0.7, max_tokens=16000
+            temperature=0.4, max_tokens=32000
         )
         response_text = response.choices[0].message.content.strip()
         if response_text.startswith('```'):
@@ -415,9 +427,52 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                 response_text = response_text[:-3]
         try:
             chunk_scenes = json.loads(response_text)
-            for scene in chunk_scenes['scenes']:
+            scenes_list = chunk_scenes.get('scenes', [])
+            for scene in scenes_list:
                 scene['scene_number'] = len(all_scenes) + 1
                 all_scenes.append(scene)
+            
+            # FIX 4: Validation + retry — check if Gemini covered the full chunk
+            if scenes_list:
+                last_scene_end = scenes_list[-1].get('end_time', 0)
+                uncovered = chunk_time_end - last_scene_end
+                if uncovered > 10:
+                    logger.warning(f"Chunk {chunk_num}: Gemini stopped at {last_scene_end:.1f}s, {uncovered:.1f}s uncovered. Retrying uncovered section.")
+                    # Find segments in the uncovered range
+                    retry_segments = [s for s in chunk_segments if s['start'] >= last_scene_end - 1]
+                    if retry_segments:
+                        retry_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in retry_segments])
+                        retry_start = last_scene_end
+                        retry_end = chunk_time_end
+                        retry_msg = (
+                            f"You need to create scenes covering {retry_start:.1f}s to {retry_end:.1f}s.\n"
+                            f"The first scene MUST start at {retry_start:.1f}s. The last scene MUST end at {retry_end:.1f}s.\n\n"
+                            f"Transcript:\n\n{retry_text}"
+                        )
+                        retry_response = client.chat.completions.create(
+                            model=scene_model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": retry_msg}
+                            ],
+                            temperature=0.4, max_tokens=32000
+                        )
+                        retry_text_resp = retry_response.choices[0].message.content.strip()
+                        if retry_text_resp.startswith('```'):
+                            retry_text_resp = retry_text_resp.split('\n', 1)[1]
+                            if retry_text_resp.endswith('```'):
+                                retry_text_resp = retry_text_resp[:-3]
+                        try:
+                            retry_scenes = json.loads(retry_text_resp)
+                            for scene in retry_scenes.get('scenes', []):
+                                scene['scene_number'] = len(all_scenes) + 1
+                                all_scenes.append(scene)
+                            logger.info(f"Retry added {len(retry_scenes.get('scenes', []))} scenes for uncovered section")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Retry JSON parse error in chunk {chunk_num}: {e}")
+            
+            logger.info(f"Chunk {chunk_num}/{total_chunks}: {len(scenes_list)} scenes, "
+                        f"{chunk_time_start:.1f}s-{chunk_time_end:.1f}s")
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
     
@@ -1476,8 +1531,26 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
         output_path = os.path.join(work_dir, output_filename)
         compose_final_video(scene_videos, filepath, output_path, session_id, audio_duration=audio_duration)
 
+        # Save generation state for scene regeneration
+        generation_state = {
+            'session_id': session_id,
+            'scenes': scenes,
+            'scene_videos': scene_videos,
+            'audio_path': filepath,
+            'audio_duration': audio_duration,
+            'output_filename': output_filename,
+            'preset_id': preset_id,
+            'video_format': video_format,
+            'has_subject': has_subject,
+            'project_title': project_title
+        }
+        with open(os.path.join(work_dir, 'generation_state.json'), 'w') as f:
+            json.dump(generation_state, f, indent=2)
+
         emit_progress(session_id, 'complete', 100, 'Processing complete!', {
-            'video_url': f'/download/{session_id}/{output_filename}', 'scenes': scenes[:30]
+            'video_url': f'/download/{session_id}/{output_filename}',
+            'scenes': scenes,
+            'session_id': session_id
         })
         
         # Log generation to history
@@ -1661,6 +1734,132 @@ def upload_audio():
 @app.route('/download/<session_id>/<filename>')
 def download_file(session_id, filename):
     return send_from_directory(os.path.join(app.config['OUTPUT_FOLDER'], session_id), filename, as_attachment=True)
+
+@app.route('/scene-image/<session_id>/<int:scene_num>')
+def scene_image(session_id, scene_num):
+    """Serve the generated image for a specific scene."""
+    work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
+    img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+    if os.path.exists(img_path):
+        return send_from_directory(work_dir, f'scene_{scene_num:04d}.png')
+    return '', 404
+
+@app.route('/api/regenerate-scene', methods=['POST'])
+def regenerate_scene():
+    """Regenerate a single scene's image and recompose the video."""
+    data = request.json
+    session_id = data.get('session_id')
+    scene_num = data.get('scene_number')
+    custom_prompt = data.get('custom_prompt')  # optional: user can edit the prompt
+    
+    if not session_id or not scene_num:
+        return jsonify({'error': 'Missing session_id or scene_number'}), 400
+    
+    work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
+    state_path = os.path.join(work_dir, 'generation_state.json')
+    
+    if not os.path.exists(state_path):
+        return jsonify({'error': 'Generation state not found — video may have been cleaned up'}), 404
+    
+    with open(state_path) as f:
+        state = json.load(f)
+    
+    scenes = state['scenes']
+    scene_videos = state['scene_videos']
+    audio_path = state['audio_path']
+    audio_duration = state['audio_duration']
+    output_filename = state['output_filename']
+    preset_id = state.get('preset_id')
+    video_format = state.get('video_format', 'flash')
+    has_subject = state.get('has_subject', False)
+    
+    # Find the scene
+    scene_idx = None
+    scene = None
+    for i, s in enumerate(scenes):
+        if s['scene_number'] == scene_num:
+            scene_idx = i
+            scene = s
+            break
+    
+    if scene is None:
+        return jsonify({'error': f'Scene {scene_num} not found'}), 404
+    
+    # Use custom prompt if provided, otherwise use existing
+    prompt = custom_prompt if custom_prompt else scene['visual_description']
+    
+    # Setup Whisk session
+    preset_config = get_preset(preset_id) if preset_id else None
+    whisk_session = None
+    if preset_config:
+        whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
+        if whisk_session == "TOKEN_EXPIRED":
+            return jsonify({'error': 'Whisk token expired — update in Railway settings'}), 401
+    
+    scene_has_subject = scene.get('has_subject', False) and has_subject
+    img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+    
+    # Regenerate image
+    logger.info(f"Regenerating scene {scene_num} for session {session_id}")
+    result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+    
+    if result == "TOKEN_EXPIRED":
+        return jsonify({'error': 'Whisk token expired'}), 401
+    if not result:
+        return jsonify({'error': 'Image generation failed'}), 500
+    
+    # Rebuild clip for this scene
+    is_video = scene.get('is_video', False)
+    duration = scene['end_time'] - scene['start_time']
+    scene_effect = 'none'
+    if not is_video and video_format == 'pulse':
+        scene_effect = 'rotate_pulse'
+    
+    vid_path = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
+    
+    if is_video and result and isinstance(result, dict):
+        # Animate the new image
+        anim_path = os.path.join(work_dir, f'scene_{scene_num:04d}_anim.mp4')
+        animated = animate_image_whisk(result, prompt, anim_path, session_id, scene_num)
+        if animated:
+            trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
+            cmd = ['ffmpeg', '-y', '-i', anim_path, '-t', str(duration),
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
+                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                   trimmed]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+            vid_path = trimmed
+        else:
+            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+    else:
+        create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+    
+    # Update scene_videos list
+    scene_videos[scene_idx] = vid_path
+    
+    # Update the prompt if custom
+    if custom_prompt:
+        scenes[scene_idx]['visual_description'] = custom_prompt
+    
+    # Save updated state
+    state['scenes'] = scenes
+    state['scene_videos'] = scene_videos
+    with open(state_path, 'w') as f:
+        json.dump(state, f, indent=2)
+    
+    # Recompose the full video
+    logger.info(f"Recomposing video after scene {scene_num} regeneration")
+    output_path = os.path.join(work_dir, output_filename)
+    compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
+    
+    logger.info(f"Scene {scene_num} regenerated and video recomposed")
+    return jsonify({
+        'success': True,
+        'scene_number': scene_num,
+        'video_url': f'/download/{session_id}/{output_filename}',
+        'image_url': f'/scene-image/{session_id}/{scene_num}',
+        'scenes': scenes
+    })
 
 @app.route('/api/presets', methods=['GET'])
 def list_presets():
