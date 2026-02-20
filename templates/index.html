@@ -11,7 +11,7 @@
 </head>
 <body>
     <!-- Header -->
-    <div class="version-badge">Beta v50</div>
+    <div class="version-badge">Beta v51</div>
     <header class="header">
         <div class="logo">
             <span class="logo-text">HUNTER <span class="logo-accent">MOTIONS</span></span>
@@ -252,7 +252,7 @@
 
     <footer class="footer">
         <p>Whisper · Gemini · Whisk · Veo</p>
-        <button class="link-btn changelog-link" id="open-changelog">What's New · v50</button>
+        <button class="link-btn changelog-link" id="open-changelog">What's New · v51</button>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
@@ -299,22 +299,30 @@
     <div class="modal-overlay hidden" id="changelog-overlay">
         <div class="modal">
             <div class="modal-header">
-                <h3>What's New — v50</h3>
+                <h3>What's New — v51</h3>
                 <button class="modal-close" id="changelog-close">✕</button>
             </div>
             <div class="modal-body" id="changelog-body">
                 <div class="changelog-entry">
-                    <span class="changelog-version">v50 — Latest</span>
+                    <span class="changelog-version">v51 — Latest</span>
+                    <ul class="changelog-list">
+                        <li>3-4x faster video assembly — parallel FFmpeg processing</li>
+                        <li>Ultrafast encoding — same quality, much faster</li>
+                        <li>Eliminated redundant re-encoding on concat and audio merge</li>
+                        <li>Flash intro animation debug logging</li>
+                    </ul>
+                </div>
+                <details class="changelog-history">
+                    <summary>Previous versions</summary>
+                <div class="changelog-entry">
+                    <span class="changelog-version">v50</span>
                     <ul class="changelog-list">
                         <li>Batched generation — images 10 at a time, animations 3 at a time</li>
-                        <li>Generation time reduced from 60-90 mins to ~15-25 mins</li>
                         <li>Gemini 2.5 Flash for scene detection (15x cheaper)</li>
                         <li>Persistent storage — presets survive deployments</li>
                         <li>Pre-generation confirmation modal</li>
                     </ul>
                 </div>
-                <details class="changelog-history">
-                    <summary>Previous versions</summary>
                     <div class="changelog-entry">
                         <span class="changelog-version">v48</span>
                         <ul class="changelog-list">
