@@ -174,26 +174,44 @@ def transcribe_audio(filepath, session_id):
     chunks = split_audio_for_whisper(filepath)
     all_segments = []
     full_text_parts = []
-    time_offset = 0.0
+    audio_duration = get_audio_duration(filepath)
+    
     for ci, chunk_path in enumerate(chunks):
         emit_progress(session_id, 'transcription', int(2 + 12 * ci / len(chunks)),
                      f'Transcribing part {ci+1}/{len(chunks)}...')
+        # Calculate the true time offset based on chunk position, not Whisper's last segment
+        if len(chunks) > 1:
+            chunk_duration = audio_duration / len(chunks)
+            time_offset = ci * chunk_duration
+        else:
+            time_offset = 0.0
+        
         with open(chunk_path, 'rb') as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1", file=audio_file,
                 response_format="verbose_json", timestamp_granularities=["segment"]
             )
+        chunk_seg_count = 0
         if hasattr(transcript, 'segments') and transcript.segments:
             for seg in transcript.segments:
                 start = (seg.start if hasattr(seg, 'start') else seg['start']) + time_offset
                 end = (seg.end if hasattr(seg, 'end') else seg['end']) + time_offset
                 text = (seg.text if hasattr(seg, 'text') else seg['text']).strip()
-                all_segments.append({'start': start, 'end': end, 'text': text})
-            last_seg = transcript.segments[-1]
-            time_offset += (last_seg.end if hasattr(last_seg, 'end') else last_seg['end'])
+                if text:  # skip empty segments
+                    all_segments.append({'start': start, 'end': end, 'text': text})
+                    chunk_seg_count += 1
         full_text_parts.append(transcript.text if hasattr(transcript, 'text') else str(transcript))
+        logger.info(f"Whisper chunk {ci+1}/{len(chunks)}: {chunk_seg_count} segments, offset={time_offset:.1f}s")
         if chunk_path != filepath and os.path.exists(chunk_path):
             os.remove(chunk_path)
+    
+    # Log coverage
+    if all_segments:
+        last_seg_end = all_segments[-1]['end']
+        logger.info(f"Whisper complete: {len(all_segments)} segments, last segment ends at {last_seg_end:.1f}s (audio={audio_duration:.1f}s)")
+        if last_seg_end < audio_duration - 10:
+            logger.warning(f"Whisper transcription ends {audio_duration - last_seg_end:.1f}s before audio end!")
+    
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(all_segments)} segments')
     return {'full_text': ' '.join(full_text_parts), 'segments': all_segments}
 
@@ -381,7 +399,12 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                     '"has_subject": true, "is_video": false}]}\n\n'
                     f"{format_rules}"
                 )},
-                {"role": "user", "content": f"Transcript:\n\n{segments_text}"}
+                {"role": "user", "content": (
+                    f"Total audio duration: {audio_duration:.1f} seconds\n"
+                    f"This is section {chunk_num} of {total_chunks}.\n"
+                    f"{'IMPORTANT: This is the LAST section — your final scene end_time MUST reach ' + f'{audio_duration:.1f}s to cover the full audio.' if chunk_num == total_chunks else ''}\n\n"
+                    f"Transcript:\n\n{segments_text}"
+                )}
             ],
             temperature=0.7, max_tokens=16000
         )
@@ -397,6 +420,14 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                 all_scenes.append(scene)
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
+    
+    # Log scene coverage info
+    if all_scenes:
+        last_scene_end = max(s.get('end_time', 0) for s in all_scenes)
+        logger.info(f"Gemini scenes: {len(all_scenes)} scenes, covering 0-{last_scene_end:.1f}s (audio={audio_duration:.1f}s)")
+        if last_scene_end < audio_duration - 5:
+            logger.warning(f"Gemini left {audio_duration - last_scene_end:.1f}s uncovered at end of audio!")
+    
     emit_progress(session_id, 'scene_detection', 25, f'Detected {len(all_scenes)} scenes')
     return all_scenes
 
@@ -1057,10 +1088,66 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
 
         # FIX #7: Ensure scenes cover full audio with no gaps
         if scenes:
-            # Extend last scene to cover full audio
+            # Handle end-of-audio gap — DON'T just extend last scene
             if scenes[-1]['end_time'] < audio_duration:
-                logger.info(f"Extending last scene from {scenes[-1]['end_time']:.1f}s to {audio_duration:.1f}s")
-                scenes[-1]['end_time'] = audio_duration
+                gap = audio_duration - scenes[-1]['end_time']
+                if gap <= 5.0:
+                    # Small gap — safe to extend last scene
+                    logger.info(f"Extending last scene by {gap:.1f}s to match audio duration")
+                    scenes[-1]['end_time'] = audio_duration
+                else:
+                    # Large gap — create new scenes from transcript segments
+                    logger.warning(f"Large gap at end: {scenes[-1]['end_time']:.1f}s to {audio_duration:.1f}s ({gap:.1f}s uncovered)")
+                    gap_start = scenes[-1]['end_time']
+                    segments = transcript_data['segments']
+                    # Find transcript segments in the uncovered range
+                    gap_segments = [s for s in segments if s['end'] > gap_start and s['start'] < audio_duration]
+                    
+                    if gap_segments:
+                        # Group gap segments into ~10s scenes
+                        current_scene_start = gap_start
+                        current_texts = []
+                        for seg in gap_segments:
+                            current_texts.append(seg['text'].strip())
+                            seg_time = seg['end'] - current_scene_start
+                            # Create a new scene every ~10s or at the last segment
+                            if seg_time >= 10.0 or seg == gap_segments[-1]:
+                                narration = ' '.join(current_texts)
+                                new_scene = {
+                                    'scene_number': len(scenes) + 1,
+                                    'start_time': current_scene_start,
+                                    'end_time': min(seg['end'], audio_duration),
+                                    'narration_summary': narration[:100],
+                                    'visual_description': f"The main character in a new setting that visually represents: {narration[:200]}",
+                                    'has_subject': scenes[-1].get('has_subject', True),
+                                    'is_video': False
+                                }
+                                scenes.append(new_scene)
+                                logger.info(f"Created gap scene {new_scene['scene_number']}: {new_scene['start_time']:.1f}-{new_scene['end_time']:.1f}s")
+                                current_scene_start = seg['end']
+                                current_texts = []
+                    
+                    # Final extension if still not reaching audio end
+                    if scenes[-1]['end_time'] < audio_duration:
+                        remaining = audio_duration - scenes[-1]['end_time']
+                        if remaining > 15.0:
+                            # Still a big gap with no transcript — create filler scenes
+                            num_fillers = math.ceil(remaining / 10.0)
+                            filler_dur = remaining / num_fillers
+                            for f in range(num_fillers):
+                                filler = {
+                                    'scene_number': len(scenes) + 1,
+                                    'start_time': scenes[-1]['end_time'],
+                                    'end_time': scenes[-1]['end_time'] + filler_dur,
+                                    'narration_summary': 'Continuation',
+                                    'visual_description': f"A wide establishing shot of a peaceful, contemplative landscape — soft golden light, open sky, sense of resolution and calm",
+                                    'has_subject': False,
+                                    'is_video': False
+                                }
+                                scenes.append(filler)
+                                logger.info(f"Created filler scene {filler['scene_number']}: {filler['start_time']:.1f}-{filler['end_time']:.1f}s")
+                        else:
+                            scenes[-1]['end_time'] = audio_duration
             
             # Fill any gaps between scenes
             filled_scenes = [scenes[0]]
@@ -1068,9 +1155,27 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 prev_end = filled_scenes[-1]['end_time']
                 curr_start = scenes[i]['start_time']
                 if curr_start > prev_end + 0.5:
-                    # Gap detected — extend previous scene to fill it
-                    logger.info(f"Filling gap: {prev_end:.1f}s to {curr_start:.1f}s by extending scene {filled_scenes[-1]['scene_number']}")
-                    filled_scenes[-1]['end_time'] = curr_start
+                    gap = curr_start - prev_end
+                    if gap <= 10.0:
+                        # Small gap — extend previous scene
+                        logger.info(f"Filling gap: {prev_end:.1f}s to {curr_start:.1f}s by extending scene {filled_scenes[-1]['scene_number']}")
+                        filled_scenes[-1]['end_time'] = curr_start
+                    else:
+                        # Large gap — create a new scene from transcript
+                        gap_segs = [s for s in transcript_data['segments'] if s['end'] > prev_end and s['start'] < curr_start]
+                        gap_text = ' '.join(s['text'].strip() for s in gap_segs) if gap_segs else 'A moment of reflection and transition'
+                        gap_scene = {
+                            'scene_number': 0,  # will be renumbered
+                            'start_time': prev_end,
+                            'end_time': curr_start,
+                            'narration_summary': gap_text[:100],
+                            'visual_description': f"The main character in a new environment that represents: {gap_text[:200]}",
+                            'has_subject': True,
+                            'is_video': False
+                        }
+                        filled_scenes[-1]['end_time'] = prev_end  # don't extend
+                        filled_scenes.append(gap_scene)
+                        logger.info(f"Created gap-fill scene: {prev_end:.1f}s to {curr_start:.1f}s")
                 filled_scenes.append(scenes[i])
             
             # Ensure first scene starts at 0
