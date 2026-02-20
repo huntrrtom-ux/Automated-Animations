@@ -208,18 +208,18 @@ def get_format_scene_rules(video_format, audio_duration):
             "- ALL intro scenes must have is_video: true\n"
             "- Prioritise SHORT SNAPPY scenes: 1-4 seconds each\n"
             "- Include ONE hero scene that is 5-8 seconds long\n"
-            "- Split text on visual beats so visuals carry the story\n\n"
+            "- Each intro scene needs its own unique visual matching the narration\n\n"
             "BODY (after intro):\n"
             "- ALL body scenes must have is_video: false\n"
-            "- Scene durations: 2-6 seconds — keep it fast-paced\n"
-            "- ABSOLUTE MAXIMUM: No single scene may exceed 10 seconds under any circumstances\n"
+            "- Create a NEW scene every 2-6 seconds — keep it fast-paced\n"
+            "- NEVER exceed 10 seconds for any single scene\n"
             "- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every 10-minute mark "
-            "(can be anywhere within ±30 seconds of each 10-min mark)\n"
-            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "(can be anywhere within ±30 seconds of each 10-min mark)\n\n"
+            "COVERAGE:\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
             "- Each scene's start_time MUST equal the previous scene's end_time\n"
             "- The FIRST scene MUST start at 0.0\n"
             "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
-            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     elif video_format == 'flash':
         return (
@@ -227,17 +227,19 @@ def get_format_scene_rules(video_format, audio_duration):
             "INTRO (first ~2 minutes — flexible within ±10 seconds of the 2-minute mark):\n"
             "- ALL intro scenes must have is_video: true\n"
             "- Scene durations: 3-8 seconds, but PRIORITISE 3-5 second scenes for high tempo\n"
-            "- Split text on visual beats so visuals carry the story\n\n"
+            "- Each intro scene needs its own unique visual matching the narration\n\n"
             "BODY (after intro):\n"
             "- ALL body scenes must have is_video: false\n"
-            "- Scene durations: 5-15 seconds depending on content\n"
-            "- ABSOLUTE MAXIMUM: No single scene may exceed 15 seconds under any circumstances\n"
-            "- NO animated scenes after intro\n"
-            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "- Create a NEW scene every 5-15 seconds based on what the narrator is saying\n"
+            "- Short scenes (5-7s) when narrator makes quick points or transitions\n"
+            "- Longer scenes (10-15s) when narrator explains one concept in depth\n"
+            "- NEVER exceed 15 seconds for any single scene\n"
+            "- NO animated scenes after intro\n\n"
+            "COVERAGE:\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
             "- Each scene's start_time MUST equal the previous scene's end_time\n"
             "- The FIRST scene MUST start at 0.0\n"
             "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
-            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     elif video_format == 'deep':
         mid_point = audio_duration / 2 if audio_duration else 1800
@@ -249,17 +251,17 @@ def get_format_scene_rules(video_format, audio_duration):
             "- FRONT-LOAD with short snappy 2-4 second scenes for the first ~40 seconds\n"
             "- The last few intro scenes can be slightly longer (5-10s)\n\n"
             f"FIRST HALF (intro to ~{mid_point:.0f}s):\n"
-            "- Scene durations: 2-7 seconds, PRIORITISE shorter scenes to maintain momentum\n"
+            "- Create a NEW scene every 2-7 seconds, PRIORITISE shorter scenes to maintain momentum\n"
             "- All is_video: false\n\n"
             f"SECOND HALF (~{mid_point:.0f}s to end):\n"
-            "- Scene durations: 8-15 seconds, more relaxed pacing\n"
-            "- ABSOLUTE MAXIMUM: No single scene may exceed 15 seconds under any circumstances\n"
+            "- Create a NEW scene every 8-15 seconds, more relaxed pacing\n"
+            "- NEVER exceed 15 seconds for any single scene\n"
             "- All is_video: false\n\n"
-            "- CRITICAL: Every second of the audio MUST be covered by a scene — NO gaps between scenes\n"
+            "COVERAGE:\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
             "- Each scene's start_time MUST equal the previous scene's end_time\n"
             "- The FIRST scene MUST start at 0.0\n"
             "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
-            "- Each scene MUST have a UNIQUE visual description that matches the narration in that time window\n"
         )
     return ""
 
@@ -341,29 +343,43 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             messages=[
                 {"role": "system", "content": (
                     "You are a visual director creating scene breakdowns for an illustrated video.\n\n"
-                    "For each scene provide:\n"
-                    "1. Start and end timestamps\n"
-                    "2. A rich visual description of the scene\n"
-                    "3. Whether any person/character appears\n\n"
-                    f"{subject_note}"
-                    "VISUAL DESCRIPTION RULES:\n"
-                    "- NEVER describe any art style, rendering technique, animation style, or visual medium\n"
-                    "- NEVER say 'cartoon', 'animated', 'illustrated', 'drawn', 'realistic', '3D', etc.\n"
-                    "- The art style is handled separately — only describe CONTENT\n"
-                    "- Focus on WHAT is happening: actions, emotions, poses, gestures, environments\n"
-                    "- Describe settings richly: objects, lighting, color mood, atmosphere, camera angle\n"
-                    "- NEVER include ANY text, words, numbers, labels, signs, letters, titles, or captions in scene descriptions\n"
-                    "- NEVER include dollar amounts like '$40,000' — instead show VISUAL metaphors (mountains of cash, overflowing vaults)\n"
-                    "- NEVER include charts, graphs, statistics, percentages, or data visualizations\n"
-                    "- NEVER describe text appearing on any surface — no signs, no labels, no writing of any kind\n"
-                    "- Represent ALL concepts visually: money = piles of bills/coins, debt = chains/weights, profit = golden glow/treasure\n"
-                    "- Limit 1-3 characters per scene\n\n"
+                    "YOUR CORE TASK:\n"
+                    "Read through the transcript and create a NEW scene every 5-15 seconds of speech. "
+                    "Each scene's visual_description must be a UNIQUE image prompt that illustrates SPECIFICALLY "
+                    "what the narrator is talking about in that time window. Think of it as: every time the narrator "
+                    "moves to a new point, idea, or example, that's a new scene with a completely new visual.\n\n"
+                    "HOW TO CREATE SCENES:\n"
+                    "1. Read the transcript segment by segment\n"
+                    "2. Group 1-3 consecutive segments (5-15 seconds of speech) into one scene\n"
+                    "3. Write a visual_description that is a UNIQUE IMAGE PROMPT for that scene — it must visually "
+                    "represent what the narrator says in those specific seconds\n"
+                    "4. Move to the next group of segments and create a completely DIFFERENT scene\n"
+                    "5. Continue until the entire transcript is covered with no gaps\n\n"
+                    "SCENE VISUAL DESCRIPTION RULES:\n"
+                    "- Each visual_description is an IMAGE PROMPT — it must paint a specific, vivid picture\n"
+                    "- Every scene MUST look DIFFERENT from every other scene — different setting, action, composition, mood\n"
+                    "- Base each scene's visual on the SPECIFIC words the narrator speaks during that time window\n"
+                    "- If the narrator talks about 'buying a house' in one scene and 'paying taxes' in the next, those are TWO completely different visuals\n"
+                    "- Use metaphorical visuals for abstract concepts: money = piles of coins/bills, debt = heavy chains, growth = rising stairs, risk = stormy skies\n"
+                    "- Describe: camera angle, lighting, mood, character emotions/poses, environment details, props\n"
+                    f"{subject_note}\n"
+                    "FORBIDDEN IN VISUAL DESCRIPTIONS:\n"
+                    "- NO text, words, numbers, labels, signs, letters, titles, captions, writing, or any readable content anywhere in the scene\n"
+                    "- NO dollar amounts, percentages, statistics, charts, graphs, or data\n"
+                    "- NO art style words: 'cartoon', 'animated', 'illustrated', 'drawn', 'realistic', '3D'\n"
+                    "- The art style is controlled separately — only describe scene CONTENT\n\n"
+                    "TIMING RULES:\n"
+                    "- Each scene's start_time MUST equal the previous scene's end_time (no gaps)\n"
+                    "- The first scene MUST start at 0.0\n"
+                    "- The last scene's end_time MUST equal the final transcript timestamp\n"
+                    "- Vary durations naturally: some 5s, some 8s, some 12s — match the pacing of the speech\n"
+                    "- Quick points = shorter scenes (5-7s), detailed explanations = longer scenes (10-15s)\n"
+                    "- NEVER exceed 15 seconds for any single scene\n\n"
                     "Return valid JSON only, no markdown:\n"
-                    '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 5.0, '
-                    '"narration_summary": "brief summary", "visual_description": "detailed scene", '
+                    '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 7.5, '
+                    '"narration_summary": "what narrator says", "visual_description": "unique image prompt for this scene only", '
                     '"has_subject": true, "is_video": false}]}\n\n'
                     f"{format_rules}"
-                    "- Group related sentences into single scenes rather than one scene per sentence"
                 )},
                 {"role": "user", "content": f"Transcript:\n\n{segments_text}"}
             ],
@@ -612,6 +628,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             f"ABSOLUTE STYLE LOCK: You MUST match the exact art style from the style reference image. "
             f"Additional style details: {style_text}. "
             f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
             f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
@@ -621,6 +638,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             f"ABSOLUTE STYLE LOCK — ART STYLE: {style_text}. "
             f"Apply this style consistently to every element. "
             f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
             f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
@@ -630,6 +648,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             f"ABSOLUTE STYLE LOCK: Match the exact art style from the style reference — "
             f"same line work, coloring, shading, detail level. "
             f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
+            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
             f"If unsure, make it MORE stylized, not less. "
             f"The scene to create: {prompt}"
         )
@@ -1061,38 +1080,15 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             scenes = filled_scenes
             total = len(scenes)
 
-        # Split any scene that's too long into sub-scenes with UNIQUE descriptions
-        MAX_SCENE_DUR = 15.0  # No scene should be longer than 15s
-        split_scenes = []
-        segments = transcript_data['segments']
-        for scene in scenes:
+        # Validate scene coverage - log any gaps or oversized scenes
+        for i, scene in enumerate(scenes):
             dur = scene['end_time'] - scene['start_time']
-            if dur > MAX_SCENE_DUR:
-                num_splits = math.ceil(dur / 10.0)
-                sub_dur = dur / num_splits
-                logger.info(f"Splitting scene {scene.get('scene_number', '?')} ({dur:.1f}s) into {num_splits} sub-scenes of {sub_dur:.1f}s")
-                
-                for j in range(num_splits):
-                    sub_start = scene['start_time'] + j * sub_dur
-                    sub_end = scene['start_time'] + (j + 1) * sub_dur
-                    
-                    # Find transcript segments that overlap with this sub-scene
-                    sub_segments = [s for s in segments if s['end'] > sub_start and s['start'] < sub_end]
-                    sub_text = ' '.join(s['text'] for s in sub_segments).strip()
-                    
-                    sub_scene = dict(scene)
-                    sub_scene['start_time'] = sub_start
-                    sub_scene['end_time'] = sub_end
-                    # Create a unique description from the transcript content
-                    if sub_text:
-                        sub_scene['visual_description'] = scene['visual_description'] + f" [Scene focus: {sub_text}]"
-                        sub_scene['narration_summary'] = sub_text[:100]
-                    split_scenes.append(sub_scene)
-            else:
-                split_scenes.append(scene)
-        if len(split_scenes) != len(scenes):
-            logger.info(f"Split long scenes: {len(scenes)} -> {len(split_scenes)} scenes")
-        scenes = split_scenes
+            if dur > 20.0:
+                logger.warning(f"Scene {scene.get('scene_number', '?')} is {dur:.1f}s — Gemini created an oversized scene")
+            if i > 0:
+                gap = scene['start_time'] - scenes[i-1]['end_time']
+                if gap > 1.0:
+                    logger.warning(f"Gap of {gap:.1f}s between scenes {i} and {i+1}")
 
         # Re-renumber after split
         for i, scene in enumerate(scenes):
