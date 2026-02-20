@@ -650,7 +650,12 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         "imageModelSettings": {"imageModel": "IMAGEN_3_5", "aspectRatio": "IMAGE_ASPECT_RATIO_LANDSCAPE"},
         "mediaCategory": "MEDIA_CATEGORY_BOARD", "prompt": full_prompt, "seed": 0
     }
-    response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateImage", json=json_data, headers=headers, timeout=120)
+    try:
+        response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateImage", json=json_data, headers=headers, timeout=120)
+    except (ConnectionError, Exception) as e:
+        logger.warning(f"Whisk generateImage connection error for scene {scene_num}: {e}")
+        create_placeholder_image(prompt, output_path)
+        return None
     if response.status_code == 401:
         return "TOKEN_EXPIRED"
     if response.status_code != 200:
@@ -748,8 +753,12 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     }
 
     logger.info(f"Whisk runImageRecipe for scene {scene_num} (subject={scene_has_subject}, inputs={len(recipe_inputs)})")
-    response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
-                        data=json.dumps(json_data), headers=headers, timeout=120)
+    try:
+        response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                            data=json.dumps(json_data), headers=headers, timeout=120)
+    except (ConnectionError, Exception) as e:
+        logger.warning(f"Whisk connection error for scene {scene_num}: {e}")
+        return None
     logger.info(f"Whisk recipe response for scene {scene_num}: {response.status_code}")
 
     # Token expired — wait and retry with fresh env vars (allows mid-generation token update)
@@ -759,8 +768,12 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         time.sleep(60)
         # Re-read headers from env vars (picks up Railway variable changes)
         fresh_headers = whisk_cookie_headers()
-        response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
-                            data=json.dumps(json_data), headers=fresh_headers, timeout=120)
+        try:
+            response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                                data=json.dumps(json_data), headers=fresh_headers, timeout=120)
+        except (ConnectionError, Exception) as e:
+            logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
+            return None
         logger.info(f"Whisk retry after token refresh for scene {scene_num}: {response.status_code}")
         if response.status_code == 401:
             return "TOKEN_EXPIRED"
@@ -816,7 +829,12 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
     logger.info(f"Whisk Animate starting for scene {scene_num} (media_id={image_info.get('media_id', 'none')}, has_raw_bytes={bool(raw_bytes)})")
     response = None
     for attempt in range(5):
-        response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateVideo", json=animate_data, headers=headers, timeout=60)
+        try:
+            response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateVideo", json=animate_data, headers=headers, timeout=60)
+        except (ConnectionError, Exception) as e:
+            logger.warning(f"Animate connection error scene {scene_num} (attempt {attempt+1}): {e}")
+            time.sleep(10 * (attempt + 1))
+            continue
         logger.info(f"Animate response scene {scene_num}: status={response.status_code} (attempt {attempt+1})")
         if response.status_code == 401:
             return "TOKEN_EXPIRED"
@@ -826,8 +844,8 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         if response.status_code != 200:
             logger.warning(f"Animate scene {scene_num} HTTP error: {response.status_code} — body: {response.text[:300]}")
         break
-    if response.status_code != 200:
-        logger.error(f"Animate scene {scene_num} FAILED: HTTP {response.status_code} after all attempts — reason: {response.text[:500]}")
+    if response is None or response.status_code != 200:
+        logger.error(f"Animate scene {scene_num} FAILED after all attempts")
         return False
     result = response.json()
     operation_name = None
@@ -844,8 +862,12 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
     for i in range(90):
         time.sleep(2)
         emit_progress(session_id, 'generation', -1, f'Animating scene {scene_num}... ({(i+1)*2}s)')
-        poll_resp = req.post("https://aisandbox-pa.googleapis.com/v1:runVideoFxSingleClipsStatusCheck",
-                             json={"operations": [{"operation": {"name": operation_name}}]}, headers=headers, timeout=30)
+        try:
+            poll_resp = req.post("https://aisandbox-pa.googleapis.com/v1:runVideoFxSingleClipsStatusCheck",
+                                 json={"operations": [{"operation": {"name": operation_name}}]}, headers=headers, timeout=30)
+        except (ConnectionError, Exception) as e:
+            logger.warning(f"Poll {i+1} scene {scene_num}: connection error: {e}")
+            continue
         if poll_resp.status_code == 401:
             return "TOKEN_EXPIRED"
         if poll_resp.status_code != 200:
