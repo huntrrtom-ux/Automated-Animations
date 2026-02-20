@@ -292,6 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Store scenes globally for regeneration
         window._currentScenes = data.scenes || [];
+        window._selectedScenes = new Set();
         
         sceneTimeline.innerHTML = '';
         if (data.scenes && data.scenes.length) {
@@ -302,6 +303,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 item.dataset.sceneNum = scene.scene_number;
                 item.dataset.startTime = scene.start_time;
                 item.innerHTML = `
+                    <label class="scene-checkbox-col" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="scene-checkbox" data-scene="${scene.scene_number}" />
+                    </label>
                     <div class="scene-thumb-col">
                         <img class="scene-thumb" src="/scene-image/${currentSessionId}/${scene.scene_number}" 
                              alt="Scene ${scene.scene_number}" onerror="this.style.display='none'" />
@@ -320,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 // Click scene to seek video
                 item.addEventListener('click', (e) => {
-                    if (e.target.closest('.btn-regen')) return;
+                    if (e.target.closest('.btn-regen') || e.target.closest('.scene-checkbox-col')) return;
                     videoPreview.currentTime = scene.start_time;
                     videoPreview.play();
                     document.querySelectorAll('.scene-item-interactive').forEach(s => s.classList.remove('scene-active'));
@@ -333,7 +337,6 @@ document.addEventListener('DOMContentLoaded', () => {
             videoPreview.addEventListener('timeupdate', () => {
                 const t = videoPreview.currentTime;
                 document.querySelectorAll('.scene-item-interactive').forEach(item => {
-                    const start = parseFloat(item.dataset.startTime);
                     const sceneData = window._currentScenes.find(s => s.scene_number == item.dataset.sceneNum);
                     if (sceneData && t >= sceneData.start_time && t < sceneData.end_time) {
                         item.classList.add('scene-active');
@@ -343,9 +346,106 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             });
         }
+        updateBatchBar();
     }
     
-    // Regenerate scene handlers
+    // Batch selection management
+    function updateBatchBar() {
+        const checked = document.querySelectorAll('.scene-checkbox:checked');
+        const bar = document.getElementById('batch-regen-bar');
+        const count = document.getElementById('batch-count');
+        window._selectedScenes = new Set([...checked].map(c => parseInt(c.dataset.scene)));
+        if (checked.length > 0) {
+            bar.classList.remove('hidden');
+            count.textContent = `${checked.length} scene${checked.length > 1 ? 's' : ''} selected`;
+        } else {
+            bar.classList.add('hidden');
+        }
+    }
+    
+    document.addEventListener('change', (e) => {
+        if (e.target.classList.contains('scene-checkbox')) {
+            const item = e.target.closest('.scene-item-interactive');
+            if (e.target.checked) {
+                item.classList.add('scene-selected');
+            } else {
+                item.classList.remove('scene-selected');
+            }
+            updateBatchBar();
+        }
+    });
+    
+    document.getElementById('batch-clear').addEventListener('click', () => {
+        document.querySelectorAll('.scene-checkbox:checked').forEach(cb => {
+            cb.checked = false;
+            cb.closest('.scene-item-interactive').classList.remove('scene-selected');
+        });
+        updateBatchBar();
+    });
+    
+    // Batch regenerate
+    document.getElementById('batch-regen-btn').addEventListener('click', async () => {
+        const sceneNums = [...window._selectedScenes].sort((a, b) => a - b);
+        if (sceneNums.length === 0) return;
+        
+        const btn = document.getElementById('batch-regen-btn');
+        const btnText = btn.querySelector('.btn-text');
+        btn.disabled = true;
+        let completed = 0;
+        btnText.textContent = `Regenerating 0/${sceneNums.length}...`;
+        
+        for (const sceneNum of sceneNums) {
+            const scene = window._currentScenes.find(s => s.scene_number === sceneNum);
+            if (!scene) continue;
+            
+            btnText.textContent = `Regenerating ${completed + 1}/${sceneNums.length}...`;
+            
+            try {
+                const resp = await fetch('/api/regenerate-scene', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        scene_number: sceneNum
+                    })
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    window._currentScenes = result.scenes;
+                    // Update thumbnail
+                    const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-thumb`);
+                    if (thumb) thumb.src = result.image_url + '?t=' + Date.now();
+                    completed++;
+                }
+            } catch (err) {
+                console.error(`Failed to regenerate scene ${sceneNum}:`, err);
+            }
+        }
+        
+        // Refresh video with final recomposed version
+        const videoPreview = document.getElementById('video-preview');
+        const currentTime = videoPreview.currentTime;
+        const lastScene = window._currentScenes[0];
+        if (lastScene) {
+            // Get latest video URL from last successful response
+            videoPreview.src = downloadBtn.href + '?t=' + Date.now();
+            videoPreview.currentTime = currentTime;
+        }
+        
+        btn.disabled = false;
+        btnText.textContent = 'Regenerate Selected';
+        
+        // Clear selection
+        document.querySelectorAll('.scene-checkbox:checked').forEach(cb => {
+            cb.checked = false;
+            cb.closest('.scene-item-interactive').classList.remove('scene-selected');
+        });
+        updateBatchBar();
+        
+        showToast(`${completed}/${sceneNums.length} scenes regenerated!`, 'success');
+    });
+    
+    // Single scene regenerate handlers
     document.addEventListener('click', (e) => {
         const regenBtn = e.target.closest('.btn-regen');
         if (!regenBtn) return;
@@ -393,20 +493,16 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (result.success) {
                 status.textContent = 'Scene regenerated! Reloading...';
-                // Update scenes
                 window._currentScenes = result.scenes;
-                // Refresh video and scene list
                 const videoPreview = document.getElementById('video-preview');
                 const currentTime = videoPreview.currentTime;
                 videoPreview.src = result.video_url + '?t=' + Date.now();
                 videoPreview.currentTime = currentTime;
-                // Update scene thumbnail
+                downloadBtn.href = result.video_url;
                 const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-thumb`);
                 if (thumb) thumb.src = result.image_url + '?t=' + Date.now();
-                // Update scene desc
                 const descEl = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-desc`);
                 if (descEl) descEl.textContent = customPrompt.substring(0, 120) + (customPrompt.length > 120 ? '...' : '');
-                // Update current image preview
                 document.getElementById('regen-current-img').src = result.image_url + '?t=' + Date.now();
                 
                 showToast('Scene regenerated successfully!', 'success');

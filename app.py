@@ -1350,8 +1350,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}, effect={scene_effect}")
 
         # ===================== PHASE 1: BATCH IMAGE GENERATION =====================
-        IMAGE_BATCH_SIZE = 10
-        IMAGE_BATCH_PAUSE_EVERY = 20
+        IMAGE_BATCH_SIZE = 5  # Reduced from 10 to avoid Whisk rate limits
         image_results = [None] * len(scenes)
         images_generated = 0
 
@@ -1385,16 +1384,48 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                 return None
 
-            progress = 30 + (30 * images_generated / total)
+            progress = 30 + (25 * images_generated / total)
             emit_progress(session_id, 'generation', int(progress), f'Generating images ({images_generated}/{total})...')
             logger.info(f"Image batch {batch_start//IMAGE_BATCH_SIZE + 1}: {images_generated}/{total} complete")
 
-            # Pause every N images to avoid throttling
-            if images_generated % IMAGE_BATCH_PAUSE_EVERY == 0 and images_generated < len(scenes):
-                logger.info(f"Throttle pause after {images_generated} images (2s)")
-                time.sleep(2)
+            # Brief pause between batches to avoid throttling
+            time.sleep(1)
 
         logger.info(f"=== PHASE 1 COMPLETE: {images_generated}/{total} images generated ===")
+        
+        # ===================== PHASE 1B: RETRY FAILED SCENES =====================
+        # Find scenes that got placeholder images (result was None)
+        failed_indices = [i for i, r in enumerate(image_results) if r is None]
+        if failed_indices:
+            logger.info(f"=== PHASE 1B: Retrying {len(failed_indices)} failed scenes (1 at a time) ===")
+            emit_progress(session_id, 'generation', 56, f'Retrying {len(failed_indices)} failed images...')
+            time.sleep(5)  # Wait before retrying
+            
+            retried = 0
+            for idx in failed_indices:
+                scene = scenes[idx]
+                scene_num = scene['scene_number']
+                scene_has_subject = scene.get('has_subject', False) and has_subject
+                img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+                
+                logger.info(f"Retrying scene {scene_num}...")
+                result = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                
+                if result == "TOKEN_EXPIRED":
+                    emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                    return None
+                
+                if result is not None:
+                    image_results[idx] = result
+                    retried += 1
+                    logger.info(f"Retry SUCCESS for scene {scene_num}")
+                else:
+                    logger.warning(f"Retry FAILED for scene {scene_num} — placeholder will be used")
+                
+                time.sleep(2)  # Gentle pace for retries
+            
+            still_failed = sum(1 for r in image_results if r is None)
+            logger.info(f"=== PHASE 1B COMPLETE: {retried}/{len(failed_indices)} recovered, {still_failed} still using placeholders ===")
 
         # ===================== PHASE 2: BATCH ANIMATION (Veo) =====================
         ANIM_BATCH_SIZE = 3
