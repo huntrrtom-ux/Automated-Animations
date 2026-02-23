@@ -391,45 +391,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = document.getElementById('batch-regen-btn');
         const btnText = btn.querySelector('.btn-text');
         btn.disabled = true;
-        let completed = 0;
-        btnText.textContent = `Regenerating 0/${sceneNums.length}...`;
+        btnText.textContent = `Regenerating ${sceneNums.length} scenes...`;
         
-        for (const sceneNum of sceneNums) {
-            const scene = window._currentScenes.find(s => s.scene_number === sceneNum);
-            if (!scene) continue;
+        try {
+            const resp = await fetch('/api/regenerate-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    scene_numbers: sceneNums
+                })
+            });
+            const result = await resp.json();
             
-            btnText.textContent = `Regenerating ${completed + 1}/${sceneNums.length}...`;
-            
-            try {
-                const resp = await fetch('/api/regenerate-scene', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        scene_number: sceneNum
-                    })
+            if (result.success) {
+                window._currentScenes = result.scenes;
+                // Refresh video
+                const videoPreview = document.getElementById('video-preview');
+                const currentTime = videoPreview.currentTime;
+                videoPreview.src = result.video_url + '?t=' + Date.now();
+                videoPreview.currentTime = currentTime;
+                downloadBtn.href = result.video_url;
+                // Update thumbnails for regenerated scenes
+                const successful = result.results.filter(r => r.success);
+                successful.forEach(r => {
+                    const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${r.scene_number}"] .scene-thumb`);
+                    if (thumb) thumb.src = `/scene-image/${currentSessionId}/${r.scene_number}?t=` + Date.now();
                 });
-                const result = await resp.json();
-                if (result.success) {
-                    window._currentScenes = result.scenes;
-                    // Update thumbnail
-                    const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-thumb`);
-                    if (thumb) thumb.src = result.image_url + '?t=' + Date.now();
-                    completed++;
-                }
-            } catch (err) {
-                console.error(`Failed to regenerate scene ${sceneNum}:`, err);
+                showToast(`${successful.length}/${sceneNums.length} scenes regenerated!`, 'success');
+            } else {
+                showToast('Error: ' + (result.error || 'Batch regeneration failed'), 'error');
             }
-        }
-        
-        // Refresh video with final recomposed version
-        const videoPreview = document.getElementById('video-preview');
-        const currentTime = videoPreview.currentTime;
-        const lastScene = window._currentScenes[0];
-        if (lastScene) {
-            // Get latest video URL from last successful response
-            videoPreview.src = downloadBtn.href + '?t=' + Date.now();
-            videoPreview.currentTime = currentTime;
+        } catch (err) {
+            showToast('Network error — please try again', 'error');
         }
         
         btn.disabled = false;
@@ -441,8 +435,6 @@ document.addEventListener('DOMContentLoaded', () => {
             cb.closest('.scene-item-interactive').classList.remove('scene-selected');
         });
         updateBatchBar();
-        
-        showToast(`${completed}/${sceneNums.length} scenes regenerated!`, 'success');
     });
     
     // Single scene regenerate handlers
@@ -555,7 +547,8 @@ document.addEventListener('DOMContentLoaded', () => {
     savePresetBtn.addEventListener('click', async () => {
         const name = presetNameInput.value.trim() || 'Untitled';
         const styleText = styleTextInput.value.trim();
-        const tags = presetTagsInput.value.trim();
+        const tags = document.getElementById('preset-tags').value;
+        const tagColors = document.getElementById('preset-tag-colors').value || '{}';
         if (!styleFile && !styleText) { showToast('Provide a style image, text description, or both', 'error'); return; }
         savePresetBtn.disabled = true;
         savePresetBtn.querySelector('span').textContent = 'Saving...';
@@ -563,6 +556,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('name', name);
         formData.append('style_text', styleText);
         formData.append('tags', tags);
+        formData.append('tag_colors', tagColors);
         if (styleFile) formData.append('style', styleFile);
         if (subjectFile) formData.append('subject', subjectFile);
         try {
@@ -571,7 +565,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (resp.ok) {
                 setActivePreset(data.id, name);
                 showToast(`Preset "${name}" saved and activated`, 'success');
-                presetNameInput.value = ''; styleTextInput.value = ''; presetTagsInput.value = '';
+                presetNameInput.value = ''; styleTextInput.value = '';
+                document.getElementById('preset-tags').value = '';
+                document.getElementById('preset-tag-colors').value = '{}';
+                document.getElementById('tag-pills').innerHTML = '';
                 styleFile = null; subjectFile = null;
                 stylePreview.classList.add('hidden'); stylePlaceholder.classList.remove('hidden');
                 subjectPreview.classList.add('hidden'); subjectPlaceholder.classList.remove('hidden');
@@ -607,7 +604,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="preset-info">
                         <div class="preset-info-name">${escHtml(p.name)}${isActive ? ' ✓' : ''}</div>
                         <div class="preset-info-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
-                        ${p.tags && p.tags.length ? `<div class="preset-tags">${p.tags.map(t => `<span class="preset-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
+                        ${p.tags && p.tags.length ? `<div class="preset-tags">${p.tags.map(t => {
+                            const color = (p.tag_colors || {})[t] || 'var(--accent)';
+                            return `<span class="preset-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
+                        }).join('')}</div>` : ''}
                     </div>
                     <div class="preset-actions">
                         <button class="preset-use-btn${isActive ? ' active' : ''}" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
@@ -753,8 +753,54 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('changelog-close').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
     document.getElementById('changelog-dismiss').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
 
-    // Preset tags
-    const presetTagsInput = document.getElementById('preset-tags');
+    // Tag Builder
+    const tagPills = document.getElementById('tag-pills');
+    const tagInput = document.getElementById('preset-tags-input');
+    const tagColorPicker = document.getElementById('tag-color-picker');
+    const tagHidden = document.getElementById('preset-tags');
+    const tagColorsHidden = document.getElementById('preset-tag-colors');
+    let currentTags = [];
+    let currentTagColors = {};
+    
+    function syncTagHiddenFields() {
+        tagHidden.value = currentTags.join(',');
+        tagColorsHidden.value = JSON.stringify(currentTagColors);
+    }
+    
+    function renderTagPills() {
+        tagPills.innerHTML = '';
+        currentTags.forEach(tag => {
+            const color = currentTagColors[tag] || '#5B9BD5';
+            const pill = document.createElement('span');
+            pill.className = 'tag-pill';
+            pill.style.cssText = `background:${color}20;color:${color};border:1px solid ${color}40`;
+            pill.innerHTML = `${escHtml(tag)} <button class="tag-pill-remove" data-tag="${escHtml(tag)}">&times;</button>`;
+            tagPills.appendChild(pill);
+        });
+        syncTagHiddenFields();
+    }
+    
+    tagInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            const tag = tagInput.value.replace(/,/g, '').trim();
+            if (tag && !currentTags.includes(tag)) {
+                currentTags.push(tag);
+                currentTagColors[tag] = tagColorPicker.value;
+                tagInput.value = '';
+                renderTagPills();
+            }
+        }
+    });
+    
+    tagPills.addEventListener('click', (e) => {
+        const removeBtn = e.target.closest('.tag-pill-remove');
+        if (!removeBtn) return;
+        const tag = removeBtn.dataset.tag;
+        currentTags = currentTags.filter(t => t !== tag);
+        delete currentTagColors[tag];
+        renderTagPills();
+    });
 
     // Export presets
     document.getElementById('export-presets-btn').addEventListener('click', async () => {

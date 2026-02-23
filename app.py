@@ -113,7 +113,7 @@ def get_preset(preset_id):
             config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
     return config
 
-def save_preset(name, style_data=None, subject_data=None, style_text='', tags=''):
+def save_preset(name, style_data=None, subject_data=None, style_text='', tags='', tag_colors=None):
     preset_id = str(uuid.uuid4())[:8]
     preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
     os.makedirs(preset_dir, exist_ok=True)
@@ -124,7 +124,7 @@ def save_preset(name, style_data=None, subject_data=None, style_text='', tags=''
     tag_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
     config = {'name': name, 'has_subject': subject_data is not None,
               'has_style_image': style_data is not None, 'style_text': style_text,
-              'tags': tag_list,
+              'tags': tag_list, 'tag_colors': tag_colors or {},
               'created_at': time.strftime('%Y-%m-%d %H:%M')}
     if subject_data:
         subject_bytes = base64.b64decode(subject_data)
@@ -1914,6 +1914,118 @@ def regenerate_scene():
         'scenes': scenes
     })
 
+@app.route('/api/regenerate-batch', methods=['POST'])
+def regenerate_batch():
+    """Regenerate multiple scenes at once, recompose video only once at the end."""
+    data = request.json
+    session_id = data.get('session_id')
+    scene_numbers = data.get('scene_numbers', [])
+    
+    if not session_id or not scene_numbers:
+        return jsonify({'error': 'Missing session_id or scene_numbers'}), 400
+    
+    work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
+    state_path = os.path.join(work_dir, 'generation_state.json')
+    
+    if not os.path.exists(state_path):
+        return jsonify({'error': 'Generation state not found'}), 404
+    
+    with open(state_path) as f:
+        state = json.load(f)
+    
+    scenes = state['scenes']
+    scene_videos = state['scene_videos']
+    audio_path = state['audio_path']
+    audio_duration = state['audio_duration']
+    output_filename = state['output_filename']
+    preset_id = state.get('preset_id')
+    video_format = state.get('video_format', 'flash')
+    has_subject = state.get('has_subject', False)
+    
+    # Setup Whisk session once for the whole batch
+    preset_config = get_preset(preset_id) if preset_id else None
+    whisk_session = None
+    if preset_config:
+        whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
+        if whisk_session == "TOKEN_EXPIRED":
+            return jsonify({'error': 'Whisk token expired'}), 401
+    
+    results = []
+    
+    # Phase 1: Regenerate all images
+    for scene_num in scene_numbers:
+        scene_idx = None
+        scene = None
+        for i, s in enumerate(scenes):
+            if s['scene_number'] == scene_num:
+                scene_idx = i
+                scene = s
+                break
+        
+        if scene is None:
+            results.append({'scene_number': scene_num, 'success': False, 'error': 'Not found'})
+            continue
+        
+        prompt = scene['visual_description']
+        scene_has_subject = scene.get('has_subject', False) and has_subject
+        img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+        
+        logger.info(f"Batch regen: generating image for scene {scene_num}")
+        result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+        
+        if result == "TOKEN_EXPIRED":
+            return jsonify({'error': 'Whisk token expired', 'completed': results}), 401
+        if not result:
+            results.append({'scene_number': scene_num, 'success': False, 'error': 'Image gen failed'})
+            continue
+        
+        # Rebuild clip
+        is_video = scene.get('is_video', False)
+        duration = scene['end_time'] - scene['start_time']
+        scene_effect = 'none'
+        if not is_video and video_format == 'pulse':
+            scene_effect = 'rotate_pulse'
+        
+        vid_path = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
+        
+        if is_video and isinstance(result, dict):
+            anim_path = os.path.join(work_dir, f'scene_{scene_num:04d}_anim.mp4')
+            animated = animate_image_whisk(result, prompt, anim_path, session_id, scene_num)
+            if animated:
+                trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
+                cmd = ['ffmpeg', '-y', '-i', anim_path, '-t', str(duration),
+                       '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
+                       '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                       trimmed]
+                subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+                vid_path = trimmed
+            else:
+                create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+        else:
+            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+        
+        scene_videos[scene_idx] = vid_path
+        results.append({'scene_number': scene_num, 'success': True})
+        logger.info(f"Batch regen: scene {scene_num} done ({len(results)}/{len(scene_numbers)})")
+    
+    # Phase 2: Save state and recompose video ONCE
+    state['scene_videos'] = scene_videos
+    with open(state_path, 'w') as f:
+        json.dump(state, f, indent=2)
+    
+    logger.info(f"Batch regen: recomposing video after {len(scene_numbers)} scene regenerations")
+    output_path = os.path.join(work_dir, output_filename)
+    compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
+    
+    successful = sum(1 for r in results if r.get('success'))
+    logger.info(f"Batch regen complete: {successful}/{len(scene_numbers)} scenes regenerated")
+    return jsonify({
+        'success': True,
+        'results': results,
+        'video_url': f'/download/{session_id}/{output_filename}',
+        'scenes': scenes
+    })
+
 @app.route('/api/presets', methods=['GET'])
 def list_presets():
     return jsonify(get_all_presets())
@@ -1923,6 +2035,11 @@ def create_preset():
     name = request.form.get('name', 'Untitled')
     style_text = request.form.get('style_text', '').strip()
     tags = request.form.get('tags', '').strip()
+    tag_colors_raw = request.form.get('tag_colors', '{}')
+    try:
+        tag_colors = json.loads(tag_colors_raw)
+    except:
+        tag_colors = {}
     style_b64 = None
     if 'style' in request.files:
         style_file = request.files['style']
@@ -1935,7 +2052,7 @@ def create_preset():
         sf = request.files['subject']
         if sf.filename and allowed_image(sf.filename):
             subject_b64 = base64.b64encode(sf.read()).decode('utf-8')
-    preset_id = save_preset(name, style_b64, subject_b64, style_text, tags)
+    preset_id = save_preset(name, style_b64, subject_b64, style_text, tags, tag_colors)
     return jsonify({'id': preset_id, 'message': 'Preset saved'})
 
 @app.route('/api/presets/<preset_id>', methods=['DELETE'])
@@ -1968,7 +2085,8 @@ def export_presets():
     for p in presets:
         preset_dir = os.path.join(app.config['PRESET_FOLDER'], p['id'])
         entry = {'name': p['name'], 'has_subject': p.get('has_subject', False),
-                 'style_text': p.get('style_text', ''), 'tags': p.get('tags', [])}
+                 'style_text': p.get('style_text', ''), 'tags': p.get('tags', []),
+                 'tag_colors': p.get('tag_colors', {})}
         # Embed style image
         style_path = os.path.join(preset_dir, 'style.png')
         if os.path.exists(style_path):
@@ -2006,9 +2124,10 @@ def import_presets():
         subject_b64 = entry.get('subject_b64')
         style_text = entry.get('style_text', '')
         tags = ','.join(entry.get('tags', []))
+        tag_colors = entry.get('tag_colors', {})
         if not style_b64 and not style_text:
             continue
-        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text, tags)
+        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text, tags, tag_colors)
         count += 1
     return jsonify({'ok': True, 'count': count})
 
