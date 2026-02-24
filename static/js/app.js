@@ -260,14 +260,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (step === 'complete' && data.data) {
             isGenerating = false;
-            document.title = 'Hunter Motions';
+            document.title = 'Completed - Hunter Motions';
             stepOrder.forEach(s => {
                 const el = document.getElementById(`step-${s}`);
                 if (el) { el.classList.remove('active'); el.classList.add('complete'); }
             });
-            // Play chime
-            try { document.getElementById('completion-chime').play(); } catch(e) {}
-            // Fire confetti
             fireConfetti();
             showToast('Video generated successfully!', 'success', 6000);
             setTimeout(() => showResult(data.data), 600);

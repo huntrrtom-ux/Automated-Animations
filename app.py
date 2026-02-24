@@ -1100,18 +1100,31 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
            '-c', 'copy', temp_video]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
-    # Sync with audio duration
-    emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
+    # Log concat video duration for debugging
+    try:
+        probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                                '-of', 'default=noprint_wrappers=1:nokey=1', temp_video],
+                               capture_output=True, text=True, timeout=30)
+        concat_dur = float(probe.stdout.strip())
+        logger.info(f"Concat video duration: {concat_dur:.1f}s (audio={audio_duration:.1f}s, diff={concat_dur - audio_duration:.1f}s)")
+    except:
+        logger.warning("Could not probe concat video duration")
 
-    # Add audio
+    # Add audio — re-encode video to fix any timestamp issues from concat
+    emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
     emit_progress(session_id, 'compositing', 97, 'Adding audio track...')
     if audio_duration:
         cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path,
-               '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+               '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
+               '-pix_fmt', 'yuv420p', '-r', '25', '-vsync', 'cfr',
+               '-c:a', 'aac', '-b:a', '192k',
                '-map', '0:v:0', '-map', '1:a:0', '-t', str(audio_duration),
                output_path]
     else:
-        cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-b:v', '192k',
+        cmd = ['ffmpeg', '-y', '-i', temp_video, '-i', audio_path,
+               '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
+               '-pix_fmt', 'yuv420p', '-r', '25', '-vsync', 'cfr',
+               '-c:a', 'aac', '-b:a', '192k',
                '-map', '0:v:0', '-map', '1:a:0', output_path]
     subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
     emit_progress(session_id, 'compositing', 100, 'Final video complete!')
