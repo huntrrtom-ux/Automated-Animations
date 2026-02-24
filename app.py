@@ -476,12 +476,176 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
     
-    # Log scene coverage info
+    # Log raw Gemini output before fixing
     if all_scenes:
         last_scene_end = max(s.get('end_time', 0) for s in all_scenes)
-        logger.info(f"Gemini scenes: {len(all_scenes)} scenes, covering 0-{last_scene_end:.1f}s (audio={audio_duration:.1f}s)")
+        logger.info(f"Gemini raw output: {len(all_scenes)} scenes, covering 0-{last_scene_end:.1f}s (audio={audio_duration:.1f}s)")
         if last_scene_end < audio_duration - 5:
             logger.warning(f"Gemini left {audio_duration - last_scene_end:.1f}s uncovered at end of audio!")
+    
+    # ===================== CRITICAL POST-PROCESSING =====================
+    # Gemini often creates scenes with wrong timestamps — e.g. one scene "0-240s" 
+    # when it should be "0-7s". We fix this by:
+    # 1. Assigning each scene to the transcript segments it actually covers
+    # 2. Recalculating timestamps from those segments
+    # 3. Splitting any oversized scenes
+    # 4. Filling any remaining gaps
+    if all_scenes and segments:
+        logger.info(f"=== POST-PROCESSING: Anchoring {len(all_scenes)} scenes to transcript ===")
+        
+        # Step 1: Assign transcript segments to scenes based on narration_summary matching
+        # and positional order (scene N gets segments after scene N-1's segments)
+        # The key insight: Gemini creates scenes in ORDER matching the transcript,
+        # even if timestamps are wrong. So we distribute segments proportionally.
+        
+        total_transcript_duration = segments[-1]['end'] - segments[0]['start']
+        num_scenes = len(all_scenes)
+        
+        # Check if timestamps are drifted: compare Gemini's total vs actual audio
+        gemini_total = sum(s['end_time'] - s['start_time'] for s in all_scenes)
+        drift_ratio = gemini_total / audio_duration if audio_duration > 0 else 1.0
+        
+        logger.info(f"Gemini total duration: {gemini_total:.1f}s, Audio: {audio_duration:.1f}s, Drift ratio: {drift_ratio:.2f}")
+        
+        # If drift is significant (>10% off), redistribute timestamps proportionally
+        # Also fix if any single scene is over 30s (clearly wrong)
+        max_scene_dur = max(s['end_time'] - s['start_time'] for s in all_scenes)
+        needs_redistribution = abs(drift_ratio - 1.0) > 0.1 or max_scene_dur > 30
+        
+        if needs_redistribution:
+            logger.warning(f"Timestamp drift detected (ratio={drift_ratio:.2f}, max_scene={max_scene_dur:.1f}s) — redistributing from transcript")
+            
+            # Strategy: distribute transcript segments evenly across scenes
+            # Each scene gets segments proportional to its relative duration
+            segs_per_scene = len(segments) / num_scenes
+            
+            current_time = 0.0
+            seg_idx = 0
+            
+            for i, scene in enumerate(all_scenes):
+                # This scene gets the next batch of segments
+                if i < num_scenes - 1:
+                    # Calculate how many segments this scene should get
+                    target_end_seg = int(round((i + 1) * segs_per_scene))
+                    target_end_seg = min(target_end_seg, len(segments) - 1)
+                    # But ensure at least 1 segment per scene
+                    target_end_seg = max(target_end_seg, seg_idx + 1)
+                else:
+                    # Last scene gets all remaining segments
+                    target_end_seg = len(segments)
+                
+                scene_segments = segments[seg_idx:target_end_seg]
+                
+                if scene_segments:
+                    scene['start_time'] = current_time
+                    scene['end_time'] = scene_segments[-1]['end']
+                    current_time = scene['end_time']
+                else:
+                    # No segments left, keep a minimal duration
+                    scene['start_time'] = current_time
+                    scene['end_time'] = current_time + 5.0
+                    current_time = scene['end_time']
+                
+                seg_idx = target_end_seg
+            
+            logger.info(f"Redistributed: scenes now cover 0-{all_scenes[-1]['end_time']:.1f}s")
+        else:
+            # Timestamps are roughly correct — just enforce continuity
+            for i in range(1, len(all_scenes)):
+                expected_start = all_scenes[i-1]['end_time']
+                actual_start = all_scenes[i]['start_time']
+                if abs(actual_start - expected_start) > 0.5:
+                    duration = all_scenes[i]['end_time'] - all_scenes[i]['start_time']
+                    all_scenes[i]['start_time'] = expected_start
+                    all_scenes[i]['end_time'] = expected_start + duration
+        
+        # Step 2: Split any scene longer than 15s into smaller scenes with unique prompts
+        split_scenes = []
+        for scene in all_scenes:
+            dur = scene['end_time'] - scene['start_time']
+            if dur > 15.0:
+                num_parts = math.ceil(dur / 10.0)
+                part_dur = dur / num_parts
+                base_desc = scene['visual_description']
+                scene_segs = [s for s in segments if s['end'] > scene['start_time'] and s['start'] < scene['end_time']]
+                
+                for p in range(num_parts):
+                    part_start = scene['start_time'] + p * part_dur
+                    part_end = scene['start_time'] + (p + 1) * part_dur
+                    
+                    part_segs = [s for s in scene_segs if s['end'] > part_start and s['start'] < part_end]
+                    part_text = ' '.join(s['text'].strip() for s in part_segs) if part_segs else ''
+                    
+                    if p == 0:
+                        part_desc = base_desc
+                    elif part_text:
+                        part_desc = f"A new visual perspective illustrating: {part_text[:200]}"
+                    else:
+                        part_desc = f"{base_desc} — from a different angle and composition"
+                    
+                    split_scenes.append({
+                        'scene_number': len(split_scenes) + 1,
+                        'start_time': part_start,
+                        'end_time': part_end,
+                        'narration_summary': scene.get('narration_summary', ''),
+                        'visual_description': part_desc,
+                        'has_subject': scene.get('has_subject', True),
+                        'is_video': scene.get('is_video', False)
+                    })
+                logger.info(f"Split {dur:.1f}s scene into {num_parts} parts")
+            else:
+                scene['scene_number'] = len(split_scenes) + 1
+                split_scenes.append(scene)
+        
+        if len(split_scenes) != len(all_scenes):
+            logger.info(f"Post-processing: {len(all_scenes)} -> {len(split_scenes)} scenes after splitting")
+        all_scenes = split_scenes
+        
+        # Step 3: Ensure first scene starts at 0 and last reaches audio duration
+        if all_scenes:
+            all_scenes[0]['start_time'] = 0.0
+            
+            if all_scenes[-1]['end_time'] < audio_duration:
+                gap = audio_duration - all_scenes[-1]['end_time']
+                if gap <= 15.0:
+                    all_scenes[-1]['end_time'] = audio_duration
+                    logger.info(f"Extended last scene by {gap:.1f}s to reach audio end")
+                else:
+                    # Create scenes from remaining transcript
+                    remaining_segs = [s for s in segments if s['start'] >= all_scenes[-1]['end_time'] - 1]
+                    current_start = all_scenes[-1]['end_time']
+                    current_texts = []
+                    for seg in remaining_segs:
+                        current_texts.append(seg['text'].strip())
+                        if seg['end'] - current_start >= 10.0 or seg == remaining_segs[-1]:
+                            narration = ' '.join(current_texts)
+                            new_scene = {
+                                'scene_number': len(all_scenes) + 1,
+                                'start_time': current_start,
+                                'end_time': min(seg['end'], audio_duration),
+                                'narration_summary': narration[:100],
+                                'visual_description': f"A vivid scene illustrating: {narration[:200]}",
+                                'has_subject': True,
+                                'is_video': False
+                            }
+                            all_scenes.append(new_scene)
+                            current_start = seg['end']
+                            current_texts = []
+                            if current_start >= audio_duration:
+                                break
+                    if all_scenes[-1]['end_time'] < audio_duration:
+                        all_scenes[-1]['end_time'] = audio_duration
+                    logger.info(f"Created additional scenes to cover remaining audio")
+        
+        # Step 4: Final stats
+        total_dur = sum(s['end_time'] - s['start_time'] for s in all_scenes)
+        avg_dur = total_dur / len(all_scenes) if all_scenes else 0
+        logger.info(f"Final scenes: {len(all_scenes)}, total coverage: {total_dur:.1f}s, avg duration: {avg_dur:.1f}s")
+        
+        for s in all_scenes:
+            dur = s['end_time'] - s['start_time']
+            if dur > 20:
+                logger.warning(f"Scene {s['scene_number']} still oversized: {dur:.1f}s ({s['start_time']:.1f}-{s['end_time']:.1f})")
     
     emit_progress(session_id, 'scene_detection', 25, f'Detected {len(all_scenes)} scenes')
     return all_scenes
@@ -1292,6 +1456,14 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
 
         # Animation flags per format — enforce from pipeline side
         logger.info(f"Animation selection for format={video_format}, {len(scenes)} scenes:")
+        logger.info(f"  First scene: {scenes[0]['start_time']:.1f}-{scenes[0]['end_time']:.1f}s ({scenes[0]['end_time']-scenes[0]['start_time']:.1f}s)")
+        if len(scenes) > 1:
+            logger.info(f"  Last scene: {scenes[-1]['start_time']:.1f}-{scenes[-1]['end_time']:.1f}s ({scenes[-1]['end_time']-scenes[-1]['start_time']:.1f}s)")
+        # Log any scene > 30s as a critical warning — these indicate timestamp drift
+        for i, scene in enumerate(scenes):
+            dur = scene['end_time'] - scene['start_time']
+            if dur > 30:
+                logger.error(f"  CRITICAL: Scene {i} is {dur:.1f}s — timestamps are still wrong!")
         for i, scene in enumerate(scenes[:20]):  # Log first 20 scenes' timing
             logger.info(f"  Scene {i}: start={scene['start_time']:.1f}s, end={scene['end_time']:.1f}s, dur={scene['end_time']-scene['start_time']:.1f}s")
         if video_format == 'pulse':
@@ -1588,6 +1760,27 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             logger.info(f"Assembly batch: {clips_completed[0]}/{total} complete")
 
         logger.info(f"=== PHASE 3 COMPLETE: {clips_completed[0]}/{total} clips assembled ===")
+        
+        # Log clip durations to catch outliers
+        for i, scene in enumerate(scenes):
+            dur = scene['end_time'] - scene['start_time']
+            if dur > 20:
+                logger.warning(f"LONG CLIP: scene {scene['scene_number']} = {dur:.1f}s ({scene['start_time']:.1f}-{scene['end_time']:.1f})")
+        
+        # Verify no None clips
+        missing = [i for i, v in enumerate(scene_videos) if v is None]
+        if missing:
+            logger.error(f"Missing clips for scenes: {missing}")
+            # Fill with placeholder
+            for i in missing:
+                scene = scenes[i]
+                vid = os.path.join(work_dir, f'scene_{scene["scene_number"]:04d}_placeholder.mp4')
+                create_video_from_image(
+                    os.path.join(work_dir, f'scene_{scene["scene_number"]:04d}.png'),
+                    vid, scene['end_time'] - scene['start_time'],
+                    effect='none', scene_index=i
+                )
+                scene_videos[i] = vid
 
         # Compose
         if project_title:
