@@ -234,10 +234,10 @@ def get_format_scene_rules(video_format, audio_duration):
             "- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every 10-minute mark "
             "(can be anywhere within ±30 seconds of each 10-min mark)\n\n"
             "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
         )
     elif video_format == 'flash':
         return (
@@ -254,10 +254,10 @@ def get_format_scene_rules(video_format, audio_duration):
             "- NEVER exceed 15 seconds for any single scene\n"
             "- NO animated scenes after intro\n\n"
             "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
         )
     elif video_format == 'deep':
         mid_point = audio_duration / 2 if audio_duration else 1800
@@ -276,10 +276,10 @@ def get_format_scene_rules(video_format, audio_duration):
             "- NEVER exceed 15 seconds for any single scene\n"
             "- All is_video: false\n\n"
             "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
+            "- Every second of the audio MUST be covered — NO gaps between scenes\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time\n"
+            "- The FIRST scene MUST start at 0.0\n"
+            "- The LAST scene's end_time MUST equal the final transcript timestamp\n"
         )
     return ""
 
@@ -349,24 +349,13 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
     format_rules = get_format_scene_rules(video_format, audio_duration)
     subject_note = get_format_subject_rules(video_format, has_subject)
 
-    # Number segments globally so Gemini can reference them
-    for idx, seg in enumerate(segments):
-        seg['seg_id'] = idx + 1  # 1-based
-
     for chunk_start in range(0, len(segments), CHUNK_SIZE):
         chunk_segments = segments[chunk_start:chunk_start + CHUNK_SIZE]
         chunk_num = chunk_start // CHUNK_SIZE + 1
         total_chunks = math.ceil(len(segments) / CHUNK_SIZE)
         emit_progress(session_id, 'scene_detection', int(16 + 8 * chunk_start / len(segments)),
                      f'Analyzing section {chunk_num}/{total_chunks}...')
-        
-        # Format: segment ID with timestamp and text
-        segments_text = "\n".join([
-            f"[Seg {s['seg_id']}] ({s['start']:.1f}s-{s['end']:.1f}s): {s['text']}" 
-            for s in chunk_segments
-        ])
-        first_seg_id = chunk_segments[0]['seg_id']
-        last_seg_id = chunk_segments[-1]['seg_id']
+        segments_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in chunk_segments])
 
         # FIX 3: Calculate chunk time range so Gemini knows exactly what to cover
         chunk_time_start = chunk_segments[0]['start']
@@ -377,27 +366,21 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         system_prompt = (
             "You are a visual director creating scene breakdowns for an illustrated video.\n\n"
             "YOUR CORE TASK:\n"
-            "Read through the numbered transcript segments. Group consecutive segments into scenes — "
-            "every time the narrator moves to a new idea, concept, example, or subject, that's a new scene. "
-            "Each scene gets a unique visual description.\n\n"
+            "Read through the transcript line by line. Every time the narrator moves to a new idea, "
+            "concept, example, or subject — that's a new scene with its own unique visual. "
+            "Each scene should last 5-15 seconds based on how long the narrator spends on that point.\n\n"
             "HOW TO CREATE SCENES:\n"
-            "1. Read each numbered segment\n"
-            "2. Group consecutive segments that cover the SAME visual idea into one scene\n"
-            "3. When the narrator changes topic, start a NEW scene with the next segment\n"
-            "4. Tell me which segments belong to each scene using segment_start and segment_end IDs\n"
-            "5. The timestamps will be derived automatically from the segments — just group them correctly\n"
-            "6. Each scene's visual_description is a UNIQUE IMAGE PROMPT based ONLY on what's said in those segments\n\n"
-            "GROUPING RULES:\n"
-            "- A scene can be a SINGLE segment or multiple consecutive segments — whatever makes visual sense\n"
-            "- Start a NEW scene whenever the visual should change, even if it's just one segment\n"
-            "- Group segments together ONLY when they describe the same visual idea\n"
-            "- Maximum 15 seconds per scene — if segments span longer, split into separate scenes\n"
-            f"- You MUST use ALL segments from {first_seg_id} to {last_seg_id} with no gaps or skips\n"
-            "- Every segment must belong to exactly one scene\n\n"
+            "1. Read each line of the transcript\n"
+            "2. When the narrator changes topic or moves to a new point, start a new scene\n"
+            "3. Each scene's visual_description is a UNIQUE IMAGE PROMPT — it illustrates ONLY what the "
+            "narrator says during those specific seconds, nothing else\n"
+            "4. Scenes don't need to relate to each other — each one is a standalone visual for that moment\n"
+            "5. Short points = short scenes (5-7s). Detailed explanations = longer scenes (10-15s)\n"
+            f"6. You MUST create scenes covering from {chunk_time_start:.1f}s to {chunk_time_end:.1f}s with NO gaps\n\n"
             "SCENE VISUAL DESCRIPTION RULES:\n"
             "- Each visual_description is an IMAGE PROMPT — it must paint a specific, vivid picture\n"
             "- Every scene MUST look DIFFERENT — different setting, action, composition, mood, camera angle\n"
-            "- Base each scene's visual ONLY on what the narrator says in those segments\n"
+            "- Base each scene's visual ONLY on what the narrator says during those seconds\n"
             "- Use metaphorical visuals for abstract concepts: money = piles of coins/bills, debt = heavy chains, "
             "growth = rising stairs, risk = stormy skies, success = golden light\n"
             "- Describe: camera angle, lighting, mood, character emotions/poses, environment details, props\n"
@@ -407,8 +390,14 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             "- NO dollar amounts, percentages, statistics, charts, graphs, or data\n"
             "- NO art style words: 'cartoon', 'animated', 'illustrated', 'drawn', 'realistic', '3D'\n"
             "- The art style is controlled separately — only describe scene CONTENT\n\n"
+            "TIMING RULES:\n"
+            f"- Your scenes MUST start at {chunk_time_start:.1f}s and end at {chunk_time_end:.1f}s\n"
+            "- Each scene's start_time MUST equal the previous scene's end_time (no gaps)\n"
+            "- Vary durations: 5s, 7s, 10s, 12s — match the pacing of the speech\n"
+            "- NEVER exceed 15 seconds for any single scene\n"
+            "- NEVER create a scene shorter than 3 seconds\n\n"
             "Return valid JSON only, no markdown:\n"
-            '{"scenes": [{"scene_number": 1, "segment_start": 1, "segment_end": 3, '
+            '{"scenes": [{"scene_number": 1, "start_time": 0.0, "end_time": 7.5, '
             '"narration_summary": "what narrator says", "visual_description": "unique image prompt for this scene only", '
             '"has_subject": true, "is_video": false}]}\n\n'
             f"{format_rules}"
@@ -416,11 +405,10 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
 
         user_msg = (
             f"Total audio duration: {audio_duration:.1f} seconds\n"
-            f"This is section {chunk_num} of {total_chunks}.\n"
-            f"Group segments {first_seg_id} through {last_seg_id} into scenes.\n"
+            f"This is section {chunk_num} of {total_chunks}, covering {chunk_time_start:.1f}s to {chunk_time_end:.1f}s.\n"
         )
         if is_last_chunk:
-            user_msg += f"IMPORTANT: This is the LAST section — you MUST include segment {last_seg_id} in your final scene.\n"
+            user_msg += f"IMPORTANT: This is the LAST section — your final scene's end_time MUST reach {chunk_time_end:.1f}s.\n"
         user_msg += f"\nTranscript:\n\n{segments_text}"
 
         # FIX 2: Higher max_tokens (32000) + FIX 5: Lower temperature (0.4) for consistency
@@ -437,45 +425,28 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             response_text = response_text.split('\n', 1)[1]
             if response_text.endswith('```'):
                 response_text = response_text[:-3]
-        
-        # Build seg_id -> segment lookup
-        seg_lookup = {s['seg_id']: s for s in segments}
-        
         try:
             chunk_scenes = json.loads(response_text)
             scenes_list = chunk_scenes.get('scenes', [])
-            
             for scene in scenes_list:
                 scene['scene_number'] = len(all_scenes) + 1
-                
-                # Resolve segment references to exact timestamps
-                seg_start_id = scene.get('segment_start')
-                seg_end_id = scene.get('segment_end')
-                
-                if seg_start_id and seg_end_id and seg_start_id in seg_lookup and seg_end_id in seg_lookup:
-                    scene['start_time'] = seg_lookup[seg_start_id]['start']
-                    scene['end_time'] = seg_lookup[seg_end_id]['end']
-                else:
-                    # Fallback: Gemini may have still returned start_time/end_time
-                    if 'start_time' not in scene or 'end_time' not in scene:
-                        logger.warning(f"Scene {scene.get('scene_number')}: invalid segment refs {seg_start_id}-{seg_end_id}, skipping")
-                        continue
-                
                 all_scenes.append(scene)
             
-            # FIX 4: Validation + retry — check if Gemini covered all segments
+            # FIX 4: Validation + retry — check if Gemini covered the full chunk
             if scenes_list:
-                last_seg_end = scenes_list[-1].get('segment_end', 0)
-                if last_seg_end < last_seg_id:
-                    uncovered_segs = [s for s in chunk_segments if s['seg_id'] > last_seg_end]
-                    if uncovered_segs and len(uncovered_segs) >= 3:
-                        logger.warning(f"Chunk {chunk_num}: Gemini stopped at seg {last_seg_end}, {len(uncovered_segs)} segments uncovered. Retrying.")
-                        retry_text = "\n".join([f"[Seg {s['seg_id']}] ({s['start']:.1f}s-{s['end']:.1f}s): {s['text']}" for s in uncovered_segs])
-                        retry_first = uncovered_segs[0]['seg_id']
-                        retry_last = uncovered_segs[-1]['seg_id']
+                last_scene_end = scenes_list[-1].get('end_time', 0)
+                uncovered = chunk_time_end - last_scene_end
+                if uncovered > 10:
+                    logger.warning(f"Chunk {chunk_num}: Gemini stopped at {last_scene_end:.1f}s, {uncovered:.1f}s uncovered. Retrying uncovered section.")
+                    # Find segments in the uncovered range
+                    retry_segments = [s for s in chunk_segments if s['start'] >= last_scene_end - 1]
+                    if retry_segments:
+                        retry_text = "\n".join([f"[{s['start']:.1f}s - {s['end']:.1f}s]: {s['text']}" for s in retry_segments])
+                        retry_start = last_scene_end
+                        retry_end = chunk_time_end
                         retry_msg = (
-                            f"You need to group segments {retry_first} through {retry_last} into scenes.\n"
-                            f"You MUST include segment {retry_last} in your final scene.\n\n"
+                            f"You need to create scenes covering {retry_start:.1f}s to {retry_end:.1f}s.\n"
+                            f"The first scene MUST start at {retry_start:.1f}s. The last scene MUST end at {retry_end:.1f}s.\n\n"
                             f"Transcript:\n\n{retry_text}"
                         )
                         retry_response = client.chat.completions.create(
@@ -495,13 +466,8 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                             retry_scenes = json.loads(retry_text_resp)
                             for scene in retry_scenes.get('scenes', []):
                                 scene['scene_number'] = len(all_scenes) + 1
-                                seg_s = scene.get('segment_start')
-                                seg_e = scene.get('segment_end')
-                                if seg_s and seg_e and seg_s in seg_lookup and seg_e in seg_lookup:
-                                    scene['start_time'] = seg_lookup[seg_s]['start']
-                                    scene['end_time'] = seg_lookup[seg_e]['end']
-                                    all_scenes.append(scene)
-                            logger.info(f"Retry added {len(retry_scenes.get('scenes', []))} scenes for uncovered segments")
+                                all_scenes.append(scene)
+                            logger.info(f"Retry added {len(retry_scenes.get('scenes', []))} scenes for uncovered section")
                         except json.JSONDecodeError as e:
                             logger.error(f"Retry JSON parse error in chunk {chunk_num}: {e}")
             
@@ -510,47 +476,90 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
     
-    # Log output
+    # Log raw Gemini output before fixing
     if all_scenes:
         last_scene_end = max(s.get('end_time', 0) for s in all_scenes)
-        logger.info(f"Gemini output: {len(all_scenes)} scenes, covering 0-{last_scene_end:.1f}s (audio={audio_duration:.1f}s)")
+        logger.info(f"Gemini raw output: {len(all_scenes)} scenes, covering 0-{last_scene_end:.1f}s (audio={audio_duration:.1f}s)")
         if last_scene_end < audio_duration - 5:
             logger.warning(f"Gemini left {audio_duration - last_scene_end:.1f}s uncovered at end of audio!")
     
-    # ===================== POST-PROCESSING =====================
-    # Timestamps are now derived directly from Whisper segments, so they should be accurate.
-    # We just need to: enforce continuity, split oversized scenes, and fill any gaps.
-    
+    # ===================== CRITICAL POST-PROCESSING =====================
+    # Gemini often creates scenes with wrong timestamps — e.g. one scene "0-240s" 
+    # when it should be "0-7s". We fix this by:
+    # 1. Assigning each scene to the transcript segments it actually covers
+    # 2. Recalculating timestamps from those segments
+    # 3. Splitting any oversized scenes
+    # 4. Filling any remaining gaps
     if all_scenes and segments:
-        logger.info(f"=== POST-PROCESSING: {len(all_scenes)} scenes from segment-anchored approach ===")
+        logger.info(f"=== POST-PROCESSING: Anchoring {len(all_scenes)} scenes to transcript ===")
         
-        # Sort scenes by start_time to ensure correct order
-        all_scenes.sort(key=lambda s: s['start_time'])
+        # Step 1: Assign transcript segments to scenes based on narration_summary matching
+        # and positional order (scene N gets segments after scene N-1's segments)
+        # The key insight: Gemini creates scenes in ORDER matching the transcript,
+        # even if timestamps are wrong. So we distribute segments proportionally.
         
-        # Enforce continuity: each scene starts where the previous ends (no gaps)
-        # Scenes already have segment-derived timestamps, just close small gaps
-        gap_fixes = 0
-        for i in range(1, len(all_scenes)):
-            prev_end = all_scenes[i-1]['end_time']
-            curr_start = all_scenes[i]['start_time']
-            gap = curr_start - prev_end
-            if gap > 0.5:
-                # There's a gap — extend previous scene to cover it
-                all_scenes[i-1]['end_time'] = curr_start
-                gap_fixes += 1
-            elif gap < -0.5:
-                # Overlap — trim current scene start
-                all_scenes[i]['start_time'] = prev_end
-                gap_fixes += 1
-        if gap_fixes:
-            logger.info(f"Fixed {gap_fixes} gaps/overlaps between scenes")
+        total_transcript_duration = segments[-1]['end'] - segments[0]['start']
+        num_scenes = len(all_scenes)
         
-        # Log coverage stats
+        # Check if timestamps are drifted: compare Gemini's total vs actual audio
         gemini_total = sum(s['end_time'] - s['start_time'] for s in all_scenes)
-        max_scene_dur = max(s['end_time'] - s['start_time'] for s in all_scenes)
-        logger.info(f"Scene coverage: {gemini_total:.1f}s, Audio: {audio_duration:.1f}s, Max scene: {max_scene_dur:.1f}s")
+        drift_ratio = gemini_total / audio_duration if audio_duration > 0 else 1.0
         
-        # Split any scene longer than 15s into smaller scenes with unique prompts
+        logger.info(f"Gemini total duration: {gemini_total:.1f}s, Audio: {audio_duration:.1f}s, Drift ratio: {drift_ratio:.2f}")
+        
+        # If drift is significant (>10% off), redistribute timestamps proportionally
+        # Also fix if any single scene is over 30s (clearly wrong)
+        max_scene_dur = max(s['end_time'] - s['start_time'] for s in all_scenes)
+        needs_redistribution = abs(drift_ratio - 1.0) > 0.1 or max_scene_dur > 30
+        
+        if needs_redistribution:
+            logger.warning(f"Timestamp drift detected (ratio={drift_ratio:.2f}, max_scene={max_scene_dur:.1f}s) — redistributing from transcript")
+            
+            # Strategy: distribute transcript segments evenly across scenes
+            # Each scene gets segments proportional to its relative duration
+            segs_per_scene = len(segments) / num_scenes
+            
+            current_time = 0.0
+            seg_idx = 0
+            
+            for i, scene in enumerate(all_scenes):
+                # This scene gets the next batch of segments
+                if i < num_scenes - 1:
+                    # Calculate how many segments this scene should get
+                    target_end_seg = int(round((i + 1) * segs_per_scene))
+                    target_end_seg = min(target_end_seg, len(segments) - 1)
+                    # But ensure at least 1 segment per scene
+                    target_end_seg = max(target_end_seg, seg_idx + 1)
+                else:
+                    # Last scene gets all remaining segments
+                    target_end_seg = len(segments)
+                
+                scene_segments = segments[seg_idx:target_end_seg]
+                
+                if scene_segments:
+                    scene['start_time'] = current_time
+                    scene['end_time'] = scene_segments[-1]['end']
+                    current_time = scene['end_time']
+                else:
+                    # No segments left, keep a minimal duration
+                    scene['start_time'] = current_time
+                    scene['end_time'] = current_time + 5.0
+                    current_time = scene['end_time']
+                
+                seg_idx = target_end_seg
+            
+            logger.info(f"Redistributed: scenes now cover 0-{all_scenes[-1]['end_time']:.1f}s")
+        else:
+            # Timestamps are roughly correct — just enforce continuity
+            for i in range(1, len(all_scenes)):
+                expected_start = all_scenes[i-1]['end_time']
+                actual_start = all_scenes[i]['start_time']
+                if abs(actual_start - expected_start) > 0.5:
+                    duration = all_scenes[i]['end_time'] - all_scenes[i]['start_time']
+                    all_scenes[i]['start_time'] = expected_start
+                    all_scenes[i]['end_time'] = expected_start + duration
+        
+        # Step 2: Split any scene longer than 15s into smaller scenes with unique prompts
         split_scenes = []
         for scene in all_scenes:
             dur = scene['end_time'] - scene['start_time']
@@ -592,7 +601,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             logger.info(f"Post-processing: {len(all_scenes)} -> {len(split_scenes)} scenes after splitting")
         all_scenes = split_scenes
         
-        # Ensure first scene starts at 0 and last reaches audio duration
+        # Step 3: Ensure first scene starts at 0 and last reaches audio duration
         if all_scenes:
             all_scenes[0]['start_time'] = 0.0
             
@@ -628,7 +637,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                         all_scenes[-1]['end_time'] = audio_duration
                     logger.info(f"Created additional scenes to cover remaining audio")
         
-        # Final stats
+        # Step 4: Final stats
         total_dur = sum(s['end_time'] - s['start_time'] for s in all_scenes)
         avg_dur = total_dur / len(all_scenes) if all_scenes else 0
         logger.info(f"Final scenes: {len(all_scenes)}, total coverage: {total_dur:.1f}s, avg duration: {avg_dur:.1f}s")
