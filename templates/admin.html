@@ -51,6 +51,32 @@
         .credits-set { display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
         .credits-input { width: 140px; font-size: 0.85rem; padding: 0.45rem 0.7rem; }
         .credits-set-btn { font-size: 0.75rem; padding: 0.45rem 1rem; white-space: nowrap; }
+
+        /* Preset form */
+        .preset-form-card { margin-bottom: 1.5rem; }
+        .preset-form-desc { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 1rem; }
+        .preset-form-grid { display: flex; flex-direction: column; gap: 0.85rem; }
+        .pf-field { display: flex; flex-direction: column; }
+        .pf-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; color: var(--text-muted); }
+        .pf-optional { font-weight: 400; text-transform: none; }
+        .pf-tags-wrap { display: flex; gap: 5px; flex-wrap: wrap; min-height: 0; margin-bottom: 5px; }
+        .pf-tag-input-row { display: flex; gap: 6px; align-items: center; }
+        .pf-images-row { display: flex; gap: 1rem; }
+        .pf-file-input { font-size: 0.8rem; }
+        .preset-gallery-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .preset-io-row { display: flex; gap: 6px; }
+
+        /* Admin gallery items */
+        .admin-gallery { display: flex; flex-direction: column; gap: 0.5rem; }
+        .admin-preset-card { display: flex; align-items: center; gap: 0.85rem; padding: 0.85rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); transition: border-color 0.15s; }
+        .admin-preset-card:hover { border-color: var(--accent); }
+        .admin-preset-thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border); flex-shrink: 0; }
+        .admin-preset-info { flex: 1; min-width: 0; }
+        .admin-preset-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 2px; }
+        .admin-preset-meta { font-size: 0.72rem; color: var(--text-muted); }
+        .admin-preset-tags { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px; }
+        .admin-tag { font-size: 0.6rem; padding: 2px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+        .admin-preset-actions { display: flex; gap: 6px; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -128,50 +154,93 @@
 
         <!-- Presets Tab -->
         <div id="admin-tab-presets" class="admin-tab-content" style="display:none">
-            <div class="card" style="margin-bottom:1.5rem">
-                <h2 class="card-title" style="margin-bottom:0.5rem">Create Preset</h2>
-                <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:1rem">Define your visual style with an image, text description, or both.</p>
-                <div style="display:flex;flex-direction:column;gap:0.75rem">
-                    <div>
-                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Preset Name</label>
-                        <input type="text" id="admin-preset-name" placeholder="e.g. Family Guy + Dave" class="text-input" style="width:100%">
+            <div class="card preset-form-card">
+                <h2 class="card-title">Create Preset</h2>
+                <p class="preset-form-desc">Define your visual style with an image, text description, or both.</p>
+                <div class="preset-form-grid">
+                    <div class="pf-field">
+                        <label class="pf-label">Preset Name</label>
+                        <input type="text" id="admin-preset-name" placeholder="e.g. Family Guy + Dave" class="text-input">
                     </div>
-                    <div>
-                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Tags</label>
-                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px" id="admin-tag-pills"></div>
-                        <div style="display:flex;gap:6px">
+                    <div class="pf-field">
+                        <label class="pf-label">Tags</label>
+                        <div class="pf-tags-wrap" id="admin-tag-pills"></div>
+                        <div class="pf-tag-input-row">
                             <input type="text" id="admin-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
-                            <input type="color" id="admin-tag-color" value="#5B9BD5" style="width:30px;height:30px;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:1px">
+                            <input type="color" id="admin-tag-color" value="#5B9BD5" class="tag-color-input">
                         </div>
                     </div>
-                    <div>
-                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Style Description</label>
-                        <textarea id="admin-style-text" class="text-input" rows="3" placeholder="e.g. Family Guy cartoon style, thick outlines..." style="width:100%;resize:vertical"></textarea>
+                    <div class="pf-field">
+                        <label class="pf-label">Style Description</label>
+                        <textarea id="admin-style-text" class="text-input" rows="2" placeholder="e.g. Family Guy cartoon style, thick outlines..." style="resize:vertical"></textarea>
                     </div>
-                    <div style="display:flex;gap:1rem">
-                        <div style="flex:1">
-                            <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Style Image</label>
-                            <input type="file" id="admin-style-file" accept=".png,.jpg,.jpeg,.webp">
+                    <div class="pf-images-row">
+                        <div class="pf-field" style="flex:1">
+                            <label class="pf-label">Style Image</label>
+                            <input type="file" id="admin-style-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
                         </div>
-                        <div style="flex:1">
-                            <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Subject Image <span style="font-weight:400;text-transform:none">(optional)</span></label>
-                            <input type="file" id="admin-subject-file" accept=".png,.jpg,.jpeg,.webp">
+                        <div class="pf-field" style="flex:1">
+                            <label class="pf-label">Subject <span class="pf-optional">(optional)</span></label>
+                            <input type="file" id="admin-subject-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
                         </div>
                     </div>
-                    <button class="btn btn-primary" id="admin-save-preset" style="align-self:flex-start">Save Preset</button>
+                    <button class="btn btn-primary" id="admin-save-preset">Save Preset</button>
                 </div>
             </div>
 
             <div class="card">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                <div class="preset-gallery-header">
                     <h2 class="card-title" style="margin:0">Saved Presets</h2>
-                    <div style="display:flex;gap:6px">
-                        <button class="btn btn-ghost" id="admin-export-btn" style="font-size:0.75rem;padding:0.35rem 0.8rem">Export</button>
-                        <button class="btn btn-ghost" id="admin-import-btn" style="font-size:0.75rem;padding:0.35rem 0.8rem">Import</button>
+                    <div class="preset-io-row">
+                        <button class="btn btn-ghost btn-sm" id="admin-export-btn">Export</button>
+                        <button class="btn btn-ghost btn-sm" id="admin-import-btn">Import</button>
                         <input type="file" id="admin-import-file" accept=".json" hidden>
                     </div>
                 </div>
-                <div id="admin-preset-gallery"></div>
+                <div id="admin-preset-gallery" class="admin-gallery"></div>
+            </div>
+
+            <!-- Edit Preset Modal -->
+            <div id="edit-preset-overlay" class="modal-overlay hidden">
+                <div class="modal" style="max-width:520px">
+                    <div class="modal-header">
+                        <h3>Edit Preset</h3>
+                        <button class="modal-close" id="edit-preset-close">&times;</button>
+                    </div>
+                    <div class="modal-body" style="display:flex;flex-direction:column;gap:0.75rem">
+                        <input type="hidden" id="edit-preset-id">
+                        <div class="pf-field">
+                            <label class="pf-label">Preset Name</label>
+                            <input type="text" id="edit-preset-name" class="text-input">
+                        </div>
+                        <div class="pf-field">
+                            <label class="pf-label">Tags</label>
+                            <div class="pf-tags-wrap" id="edit-tag-pills"></div>
+                            <div class="pf-tag-input-row">
+                                <input type="text" id="edit-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
+                                <input type="color" id="edit-tag-color" value="#5B9BD5" class="tag-color-input">
+                            </div>
+                        </div>
+                        <div class="pf-field">
+                            <label class="pf-label">Style Description</label>
+                            <textarea id="edit-style-text" class="text-input" rows="2" style="resize:vertical"></textarea>
+                        </div>
+                        <div class="pf-images-row">
+                            <div class="pf-field" style="flex:1">
+                                <label class="pf-label">Replace Style Image</label>
+                                <input type="file" id="edit-style-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
+                            </div>
+                            <div class="pf-field" style="flex:1">
+                                <label class="pf-label">Replace Subject</label>
+                                <input type="file" id="edit-subject-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;padding:1rem 1.5rem;border-top:1px solid var(--border)">
+                        <button class="btn btn-ghost" id="edit-preset-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="edit-preset-save">Save Changes</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -343,21 +412,98 @@
                 const presets = await resp.json();
                 if (!presets.length) { gallery.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:2rem">No presets yet</p>'; return; }
                 gallery.innerHTML = presets.map(p => `
-                    <div style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:0.5rem;background:var(--bg-card)">
-                        <img src="/api/presets/${p.id}/style.png" style="width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid var(--border)" onerror="this.style.display='none'">
-                        <div style="flex:1;min-width:0">
-                            <div style="font-weight:600;font-size:0.88rem">${escHtml(p.name)}</div>
-                            <div style="font-size:0.72rem;color:var(--text-muted)">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
-                            ${p.tags && p.tags.length ? `<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px">${p.tags.map(t => {
+                    <div class="admin-preset-card">
+                        <img class="admin-preset-thumb" src="/api/presets/${p.id}/style.png" onerror="this.style.display='none'">
+                        <div class="admin-preset-info">
+                            <div class="admin-preset-name">${escHtml(p.name)}</div>
+                            <div class="admin-preset-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text prompt' : ''}</div>
+                            ${p.tags && p.tags.length ? `<div class="admin-preset-tags">${p.tags.map(t => {
                                 const color = (p.tag_colors || {})[t] || '#5B9BD5';
-                                return `<span style="font-size:0.6rem;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase;background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(t)}</span>`;
+                                return `<span class="admin-tag" style="background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(t)}</span>`;
                             }).join('')}</div>` : ''}
                         </div>
-                        <button onclick="deleteAdminPreset('${p.id}')" class="btn btn-ghost" style="font-size:0.75rem;padding:0.3rem 0.7rem;color:var(--error)">Delete</button>
+                        <div class="admin-preset-actions">
+                            <button onclick="editAdminPreset('${p.id}')" class="btn btn-ghost btn-sm">Edit</button>
+                            <button onclick="deleteAdminPreset('${p.id}')" class="btn btn-ghost btn-sm" style="color:var(--error)">Delete</button>
+                        </div>
                     </div>
                 `).join('');
             } catch { gallery.innerHTML = '<p style="color:var(--error)">Failed to load presets</p>'; }
         }
+
+        // Edit preset
+        let editTags = [];
+        let editTagColors = {};
+
+        function renderEditTags() {
+            const container = document.getElementById('edit-tag-pills');
+            container.innerHTML = editTags.map(tag => {
+                const color = editTagColors[tag] || '#5B9BD5';
+                return `<span class="admin-tag" style="background:${color}20;color:${color};border:1px solid ${color}40;padding:3px 8px;font-size:0.72rem;display:inline-flex;align-items:center;gap:4px">${escHtml(tag)} <button onclick="removeEditTag('${escHtml(tag)}')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.85rem;padding:0;opacity:0.6">&times;</button></span>`;
+            }).join('');
+        }
+        window.removeEditTag = function(tag) {
+            editTags = editTags.filter(t => t !== tag);
+            delete editTagColors[tag];
+            renderEditTags();
+        };
+
+        document.getElementById('edit-tag-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const tag = e.target.value.replace(/,/g, '').trim();
+                if (tag && !editTags.includes(tag)) {
+                    editTags.push(tag);
+                    editTagColors[tag] = document.getElementById('edit-tag-color').value;
+                    e.target.value = '';
+                    renderEditTags();
+                }
+            }
+        });
+
+        window.editAdminPreset = async function(id) {
+            const resp = await fetch(`/api/presets/${id}`);
+            if (!resp.ok) { alert('Failed to load preset'); return; }
+            const p = await resp.json();
+            document.getElementById('edit-preset-id').value = id;
+            document.getElementById('edit-preset-name').value = p.name || '';
+            document.getElementById('edit-style-text').value = p.style_text || '';
+            document.getElementById('edit-style-file').value = '';
+            document.getElementById('edit-subject-file').value = '';
+            editTags = p.tags || [];
+            editTagColors = p.tag_colors || {};
+            renderEditTags();
+            document.getElementById('edit-preset-overlay').classList.remove('hidden');
+        };
+
+        document.getElementById('edit-preset-close').addEventListener('click', () => document.getElementById('edit-preset-overlay').classList.add('hidden'));
+        document.getElementById('edit-preset-cancel').addEventListener('click', () => document.getElementById('edit-preset-overlay').classList.add('hidden'));
+
+        document.getElementById('edit-preset-save').addEventListener('click', async () => {
+            const id = document.getElementById('edit-preset-id').value;
+            const formData = new FormData();
+            formData.append('name', document.getElementById('edit-preset-name').value.trim());
+            formData.append('style_text', document.getElementById('edit-style-text').value.trim());
+            formData.append('tags', editTags.join(','));
+            formData.append('tag_colors', JSON.stringify(editTagColors));
+            const styleFile = document.getElementById('edit-style-file').files[0];
+            const subjectFile = document.getElementById('edit-subject-file').files[0];
+            if (styleFile) formData.append('style', styleFile);
+            if (subjectFile) formData.append('subject', subjectFile);
+            const btn = document.getElementById('edit-preset-save');
+            btn.disabled = true; btn.textContent = 'Saving...';
+            try {
+                const resp = await fetch(`/api/presets/${id}`, { method: 'PUT', body: formData });
+                if (resp.ok) {
+                    document.getElementById('edit-preset-overlay').classList.add('hidden');
+                    loadAdminPresets();
+                } else {
+                    const data = await resp.json();
+                    alert(data.error || 'Update failed');
+                }
+            } catch { alert('Update failed'); }
+            btn.disabled = false; btn.textContent = 'Save Changes';
+        });
 
         window.deleteAdminPreset = async function(id) {
             if (!confirm('Delete this preset?')) return;

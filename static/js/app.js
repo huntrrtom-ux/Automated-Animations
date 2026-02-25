@@ -80,13 +80,17 @@ document.addEventListener('DOMContentLoaded', () => {
             activePresetId = selected.value;
             localStorage.setItem('activePresetId', selected.value);
             localStorage.setItem('activePresetName', selected.textContent);
+            updateSelectedPresetInfo();
         }
     });
+
+    let presetDataCache = [];
 
     async function loadPresetDropdown() {
         try {
             const resp = await fetch('/api/presets');
             const presets = await resp.json();
+            presetDataCache = presets;
             presetSelect.innerHTML = '<option value="" disabled>Select a preset...</option>';
             presets.forEach(p => {
                 const opt = document.createElement('option');
@@ -99,7 +103,27 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activePresetId && !presetSelect.value) {
                 presetSelect.value = '';
             }
+            updateSelectedPresetInfo();
         } catch (err) { console.error('Load presets error:', err); }
+    }
+
+    function updateSelectedPresetInfo() {
+        const info = document.getElementById('preset-selected-info');
+        const thumb = document.getElementById('preset-selected-thumb');
+        const name = document.getElementById('preset-selected-name');
+        const tagsEl = document.getElementById('preset-selected-tags');
+        if (!activePresetId) { info.classList.add('hidden'); return; }
+        const p = presetDataCache.find(x => x.id === activePresetId);
+        if (!p) { info.classList.add('hidden'); return; }
+        thumb.src = `/api/presets/${p.id}/style.png`;
+        name.textContent = p.name;
+        if (p.tags && p.tags.length) {
+            tagsEl.innerHTML = p.tags.map(t => {
+                const color = (p.tag_colors || {})[t] || 'var(--accent)';
+                return `<span class="preset-sel-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
+            }).join('');
+        } else { tagsEl.innerHTML = ''; }
+        info.classList.remove('hidden');
     }
 
     // File

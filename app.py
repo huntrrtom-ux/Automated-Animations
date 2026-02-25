@@ -2265,6 +2265,54 @@ def create_preset():
 def remove_preset(preset_id):
     return jsonify({'message': 'Deleted'}) if delete_preset(preset_id) else (jsonify({'error': 'Not found'}), 404)
 
+@app.route('/api/presets/<preset_id>', methods=['PUT'])
+def update_preset(preset_id):
+    """Update an existing preset's name, tags, style text, and images."""
+    preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
+    config_path = os.path.join(preset_dir, 'config.json')
+    if not os.path.exists(config_path):
+        return jsonify({'error': 'Preset not found'}), 404
+    with open(config_path) as f:
+        config = json.load(f)
+    # Update fields if provided
+    name = request.form.get('name')
+    if name is not None:
+        config['name'] = name
+    style_text = request.form.get('style_text')
+    if style_text is not None:
+        config['style_text'] = style_text
+    tags = request.form.get('tags')
+    if tags is not None:
+        config['tags'] = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
+    tag_colors = request.form.get('tag_colors')
+    if tag_colors:
+        try:
+            config['tag_colors'] = json.loads(tag_colors)
+        except:
+            pass
+    # Update images if new ones uploaded
+    if 'style' in request.files:
+        sf = request.files['style']
+        if sf.filename and allowed_image(sf.filename):
+            with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
+                f.write(sf.read())
+            config['has_style_image'] = True
+    if 'subject' in request.files:
+        sf = request.files['subject']
+        if sf.filename and allowed_image(sf.filename):
+            with open(os.path.join(preset_dir, 'subject.png'), 'wb') as f:
+                f.write(sf.read())
+            config['has_subject'] = True
+    # Allow removing subject
+    if request.form.get('remove_subject') == 'true':
+        subject_path = os.path.join(preset_dir, 'subject.png')
+        if os.path.exists(subject_path):
+            os.remove(subject_path)
+        config['has_subject'] = False
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    return jsonify({'ok': True, 'id': preset_id})
+
 @app.route('/api/presets/reorder', methods=['POST'])
 def reorder_presets():
     order = request.json.get('order', [])
@@ -2272,6 +2320,17 @@ def reorder_presets():
         return jsonify({'error': 'Invalid order'}), 400
     save_preset_order(order)
     return jsonify({'ok': True})
+
+@app.route('/api/presets/<preset_id>', methods=['GET'])
+def get_single_preset(preset_id):
+    """Get a single preset's config data."""
+    config_path = os.path.join(app.config['PRESET_FOLDER'], preset_id, 'config.json')
+    if not os.path.exists(config_path):
+        return jsonify({'error': 'Not found'}), 404
+    with open(config_path) as f:
+        config = json.load(f)
+    config['id'] = preset_id
+    return jsonify(config)
 
 @app.route('/api/presets/<preset_id>/style.png')
 def preset_style_image(preset_id):
