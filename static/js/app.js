@@ -37,8 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadBtn = document.getElementById('download-btn');
     const newBtn = document.getElementById('new-btn');
 
-    const presetNameInput = document.getElementById('preset-name');
-    const styleTextInput = document.getElementById('style-text');
+    const presetSelect = document.getElementById('preset-select');
 
     // Format selector
     let selectedFormat = null;
@@ -49,29 +48,10 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedFormat = card.dataset.format;
         });
     });
-    const styleInput = document.getElementById('style-input');
-    const subjectInput = document.getElementById('subject-input');
-    const styleUploadBox = document.getElementById('style-upload-box');
-    const subjectUploadBox = document.getElementById('subject-upload-box');
-    const stylePlaceholder = document.getElementById('style-placeholder');
-    const subjectPlaceholder = document.getElementById('subject-placeholder');
-    const stylePreview = document.getElementById('style-preview');
-    const subjectPreview = document.getElementById('subject-preview');
-    const savePresetBtn = document.getElementById('save-preset-btn');
-    const presetGallery = document.getElementById('preset-gallery');
-
-    const presetBarEmpty = document.getElementById('preset-bar-empty');
-    const presetBarActive = document.getElementById('preset-bar-active');
-    const presetBarThumb = document.getElementById('preset-bar-thumb');
-    const presetBarName = document.getElementById('preset-bar-name');
-    const goToSettings = document.getElementById('go-to-settings');
-    const changePreset = document.getElementById('change-preset');
 
     let selectedFile = null;
     let currentSessionId = null;
     let activePresetId = null;
-    let styleFile = null;
-    let subjectFile = null;
 
     // Theme
     const themeToggle = document.getElementById('theme-toggle');
@@ -93,25 +73,34 @@ document.addEventListener('DOMContentLoaded', () => {
         handleProgress(data);
     });
 
-    // Tabs
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            btn.classList.add('active');
-            document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
-            if (btn.dataset.tab === 'settings') loadPresets();
-        });
+    // Preset dropdown
+    presetSelect.addEventListener('change', () => {
+        const selected = presetSelect.options[presetSelect.selectedIndex];
+        if (selected.value) {
+            activePresetId = selected.value;
+            localStorage.setItem('activePresetId', selected.value);
+            localStorage.setItem('activePresetName', selected.textContent);
+        }
     });
 
-    goToSettings.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        document.querySelector('[data-tab="settings"]').classList.add('active');
-        document.getElementById('tab-settings').classList.add('active');
-        loadPresets();
-    });
-    changePreset.addEventListener('click', () => goToSettings.click());
+    async function loadPresetDropdown() {
+        try {
+            const resp = await fetch('/api/presets');
+            const presets = await resp.json();
+            presetSelect.innerHTML = '<option value="" disabled>Select a preset...</option>';
+            presets.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                if (p.id === activePresetId) opt.selected = true;
+                presetSelect.appendChild(opt);
+            });
+            // If saved preset still exists, keep it selected
+            if (activePresetId && !presetSelect.value) {
+                presetSelect.value = '';
+            }
+        } catch (err) { console.error('Load presets error:', err); }
+    }
 
     // File
     browseBtn.addEventListener('click', (e) => { e.stopPropagation(); fileInput.click(); });
@@ -144,11 +133,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     generateBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
-        if (!activePresetId) { showToast('Select a preset in Settings first', 'error'); return; }
+        if (!activePresetId) { showToast('Select a preset from the dropdown', 'error'); return; }
         if (!selectedFormat) { showToast('Select a format (Pulse, Flash, or Deep)', 'error'); return; }
         
         // Show confirmation modal
-        const presetName = localStorage.getItem('activePresetName') || 'Unknown';
+        const presetName = presetSelect.options[presetSelect.selectedIndex]?.textContent || 'Unknown';
         const formatNames = { pulse: '⚡ Pulse — Fast-paced entertainment', flash: '🎓 Flash — Animated educational', deep: '📚 Deep — Longform educational' };
         const titleInput = document.getElementById('project-title');
         const titleVal = titleInput.value.trim() || 'Untitled';
@@ -415,7 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const thumb = document.querySelector(`.scene-item-interactive[data-scene-num="${r.scene_number}"] .scene-thumb`);
                     if (thumb) thumb.src = `/scene-image/${currentSessionId}/${r.scene_number}?t=` + Date.now();
                 });
-                showToast(`${successful.length}/${sceneNums.length} scenes regenerated!`, 'success');
+                showBatchComplete(successful.length, sceneNums.length);
             } else {
                 showToast('Error: ' + (result.error || 'Batch regeneration failed'), 'error');
             }
@@ -520,173 +509,6 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadSection.classList.remove('hidden');
     });
 
-    // Settings
-    styleUploadBox.addEventListener('click', () => styleInput.click());
-    subjectUploadBox.addEventListener('click', () => subjectInput.click());
-
-    styleInput.addEventListener('change', (e) => {
-        if (e.target.files.length) {
-            styleFile = e.target.files[0];
-            stylePreview.src = URL.createObjectURL(styleFile);
-            stylePreview.classList.remove('hidden');
-            stylePlaceholder.classList.add('hidden');
-        }
-    });
-    subjectInput.addEventListener('change', (e) => {
-        if (e.target.files.length) {
-            subjectFile = e.target.files[0];
-            subjectPreview.src = URL.createObjectURL(subjectFile);
-            subjectPreview.classList.remove('hidden');
-            subjectPlaceholder.classList.add('hidden');
-        }
-    });
-
-    savePresetBtn.addEventListener('click', async () => {
-        const name = presetNameInput.value.trim() || 'Untitled';
-        const styleText = styleTextInput.value.trim();
-        const tags = document.getElementById('preset-tags').value;
-        const tagColors = document.getElementById('preset-tag-colors').value || '{}';
-        if (!styleFile && !styleText) { showToast('Provide a style image, text description, or both', 'error'); return; }
-        savePresetBtn.disabled = true;
-        savePresetBtn.querySelector('span').textContent = 'Saving...';
-        const formData = new FormData();
-        formData.append('name', name);
-        formData.append('style_text', styleText);
-        formData.append('tags', tags);
-        formData.append('tag_colors', tagColors);
-        if (styleFile) formData.append('style', styleFile);
-        if (subjectFile) formData.append('subject', subjectFile);
-        try {
-            const resp = await fetch('/api/presets', { method: 'POST', body: formData });
-            const data = await resp.json();
-            if (resp.ok) {
-                setActivePreset(data.id, name);
-                showToast(`Preset "${name}" saved and activated`, 'success');
-                presetNameInput.value = ''; styleTextInput.value = '';
-                document.getElementById('preset-tags').value = '';
-                document.getElementById('preset-tag-colors').value = '{}';
-                document.getElementById('tag-pills').innerHTML = '';
-                styleFile = null; subjectFile = null;
-                stylePreview.classList.add('hidden'); stylePlaceholder.classList.remove('hidden');
-                subjectPreview.classList.add('hidden'); subjectPlaceholder.classList.remove('hidden');
-                styleInput.value = ''; subjectInput.value = '';
-                loadPresets();
-            } else { showToast(data.error || 'Save failed', 'error'); }
-        } catch { showToast('Failed to save preset', 'error'); }
-        savePresetBtn.disabled = false;
-        savePresetBtn.querySelector('span').textContent = 'Save Preset';
-    });
-
-    async function loadPresets() {
-        try {
-            const resp = await fetch('/api/presets');
-            const presets = await resp.json();
-            presetGallery.innerHTML = '';
-            if (!presets.length) {
-                presetGallery.innerHTML = '<p class="empty-state">No presets saved yet</p>';
-                return;
-            }
-            presets.forEach(p => {
-                const item = document.createElement('div');
-                item.className = 'preset-item';
-                item.draggable = true;
-                item.dataset.presetId = p.id;
-                const isActive = p.id === activePresetId;
-                item.innerHTML = `
-                    <div class="preset-drag-handle">⠿</div>
-                    <div class="preset-thumbs">
-                        <img class="preset-thumb" src="/api/presets/${p.id}/style.png" alt="Style">
-                        ${p.has_subject ? `<img class="preset-thumb" src="/api/presets/${p.id}/subject.png" alt="Subject">` : `<div class="preset-thumb-empty">—</div>`}
-                    </div>
-                    <div class="preset-info">
-                        <div class="preset-info-name">${escHtml(p.name)}${isActive ? ' ✓' : ''}</div>
-                        <div class="preset-info-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
-                        ${p.tags && p.tags.length ? `<div class="preset-tags">${p.tags.map(t => {
-                            const color = (p.tag_colors || {})[t] || 'var(--accent)';
-                            return `<span class="preset-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
-                        }).join('')}</div>` : ''}
-                    </div>
-                    <div class="preset-actions">
-                        <button class="preset-use-btn${isActive ? ' active' : ''}" data-id="${p.id}" data-name="${escHtml(p.name)}">${isActive ? 'Active' : 'Use'}</button>
-                        <button class="preset-delete-btn" data-id="${p.id}">✕</button>
-                    </div>
-                `;
-                presetGallery.appendChild(item);
-            });
-
-            // Drag and drop reorder
-            let dragItem = null;
-            presetGallery.querySelectorAll('.preset-item').forEach(item => {
-                item.addEventListener('dragstart', (e) => {
-                    dragItem = item;
-                    item.classList.add('dragging');
-                    e.dataTransfer.effectAllowed = 'move';
-                });
-                item.addEventListener('dragend', () => {
-                    item.classList.remove('dragging');
-                    presetGallery.querySelectorAll('.preset-item').forEach(el => el.classList.remove('drag-over'));
-                    // Save new order
-                    const order = [...presetGallery.querySelectorAll('.preset-item')].map(el => el.dataset.presetId);
-                    fetch('/api/presets/reorder', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ order })
-                    });
-                    dragItem = null;
-                });
-                item.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    if (item === dragItem) return;
-                    item.classList.add('drag-over');
-                });
-                item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
-                item.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    item.classList.remove('drag-over');
-                    if (item === dragItem || !dragItem) return;
-                    const items = [...presetGallery.querySelectorAll('.preset-item')];
-                    const fromIdx = items.indexOf(dragItem);
-                    const toIdx = items.indexOf(item);
-                    if (fromIdx < toIdx) {
-                        item.after(dragItem);
-                    } else {
-                        item.before(dragItem);
-                    }
-                });
-            });
-            presetGallery.querySelectorAll('.preset-use-btn').forEach(btn => {
-                btn.addEventListener('click', () => { setActivePreset(btn.dataset.id, btn.dataset.name); loadPresets(); });
-            });
-            presetGallery.querySelectorAll('.preset-delete-btn').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    if (!confirm('Delete this preset?')) return;
-                    await fetch(`/api/presets/${btn.dataset.id}`, { method: 'DELETE' });
-                    if (activePresetId === btn.dataset.id) { activePresetId = null; updatePresetBar(); }
-                    loadPresets();
-                });
-            });
-        } catch (err) { console.error('Load presets error:', err); }
-    }
-
-    function setActivePreset(id, name) {
-        activePresetId = id;
-        localStorage.setItem('activePresetId', id);
-        localStorage.setItem('activePresetName', name);
-        updatePresetBar();
-    }
-
-    function updatePresetBar() {
-        if (activePresetId) {
-            presetBarEmpty.classList.add('hidden');
-            presetBarActive.classList.remove('hidden');
-            presetBarThumb.src = `/api/presets/${activePresetId}/style.png`;
-            presetBarName.textContent = localStorage.getItem('activePresetName') || 'Preset';
-        } else {
-            presetBarEmpty.classList.remove('hidden');
-            presetBarActive.classList.add('hidden');
-        }
-    }
-
     // Confetti effect
     function fireConfetti() {
         const canvas = document.getElementById('confetti-canvas');
@@ -750,93 +572,26 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('changelog-close').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
     document.getElementById('changelog-dismiss').addEventListener('click', () => changelogOverlay.classList.add('hidden'));
 
-    // Tag Builder
-    const tagPills = document.getElementById('tag-pills');
-    const tagInput = document.getElementById('preset-tags-input');
-    const tagColorPicker = document.getElementById('tag-color-picker');
-    const tagHidden = document.getElementById('preset-tags');
-    const tagColorsHidden = document.getElementById('preset-tag-colors');
-    let currentTags = [];
-    let currentTagColors = {};
-    
-    function syncTagHiddenFields() {
-        tagHidden.value = currentTags.join(',');
-        tagColorsHidden.value = JSON.stringify(currentTagColors);
-    }
-    
-    function renderTagPills() {
-        tagPills.innerHTML = '';
-        currentTags.forEach(tag => {
-            const color = currentTagColors[tag] || '#5B9BD5';
-            const pill = document.createElement('span');
-            pill.className = 'tag-pill';
-            pill.style.cssText = `background:${color}20;color:${color};border:1px solid ${color}40`;
-            pill.innerHTML = `${escHtml(tag)} <button class="tag-pill-remove" data-tag="${escHtml(tag)}">&times;</button>`;
-            tagPills.appendChild(pill);
-        });
-        syncTagHiddenFields();
-    }
-    
-    tagInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ',') {
-            e.preventDefault();
-            const tag = tagInput.value.replace(/,/g, '').trim();
-            if (tag && !currentTags.includes(tag)) {
-                currentTags.push(tag);
-                currentTagColors[tag] = tagColorPicker.value;
-                tagInput.value = '';
-                renderTagPills();
-            }
-        }
-    });
-    
-    tagPills.addEventListener('click', (e) => {
-        const removeBtn = e.target.closest('.tag-pill-remove');
-        if (!removeBtn) return;
-        const tag = removeBtn.dataset.tag;
-        currentTags = currentTags.filter(t => t !== tag);
-        delete currentTagColors[tag];
-        renderTagPills();
+
+    // Batch regeneration complete popup
+    document.getElementById('batch-complete-continue').addEventListener('click', () => {
+        document.getElementById('batch-complete-overlay').classList.add('hidden');
     });
 
-    // Export presets
-    document.getElementById('export-presets-btn').addEventListener('click', async () => {
-        try {
-            const resp = await fetch('/api/presets/export');
-            if (!resp.ok) { showToast('Export failed', 'error'); return; }
-            const blob = await resp.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `hunter-motions-presets-${new Date().toISOString().slice(0,10)}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('Presets exported', 'success');
-        } catch { showToast('Export failed', 'error'); }
-    });
+    function showBatchComplete(completed, total) {
+        document.getElementById('batch-complete-msg').textContent = `${completed} of ${total} scene${total > 1 ? 's' : ''} regenerated successfully`;
+        document.getElementById('batch-complete-overlay').classList.remove('hidden');
+    }
 
-    // Import presets
-    const importFileInput = document.getElementById('import-file-input');
-    document.getElementById('import-presets-btn').addEventListener('click', () => importFileInput.click());
-    importFileInput.addEventListener('change', async (e) => {
-        if (!e.target.files.length) return;
-        const file = e.target.files[0];
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            const resp = await fetch('/api/presets/import', { method: 'POST', body: formData });
-            const data = await resp.json();
-            if (resp.ok) {
-                showToast(`Imported ${data.count} preset(s)`, 'success');
-                loadPresets();
-            } else {
-                showToast(data.error || 'Import failed', 'error');
-            }
-        } catch { showToast('Import failed', 'error'); }
-        importFileInput.value = '';
-    });
+    function setActivePreset(id, name) {
+        activePresetId = id;
+        localStorage.setItem('activePresetId', id);
+        localStorage.setItem('activePresetName', name);
+        if (presetSelect) presetSelect.value = id;
+    }
 
     // Init
     const savedPresetId = localStorage.getItem('activePresetId');
-    if (savedPresetId) { activePresetId = savedPresetId; updatePresetBar(); }
+    if (savedPresetId) { activePresetId = savedPresetId; }
+    loadPresetDropdown();
 });

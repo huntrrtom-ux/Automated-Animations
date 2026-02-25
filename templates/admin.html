@@ -56,10 +56,16 @@
 <body>
     <div class="admin-header">
         <h1>HUNTER <span class="logo-accent">MOTIONS</span> — Admin</h1>
-        <a href="/" class="btn btn-ghost" style="padding:0.4rem 1rem;font-size:0.8rem;">← Back to App</a>
+        <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost admin-tab-btn active" data-tab="stats" style="padding:0.4rem 1rem;font-size:0.8rem;">Stats</button>
+            <button class="btn btn-ghost admin-tab-btn" data-tab="presets" style="padding:0.4rem 1rem;font-size:0.8rem;">Presets</button>
+            <a href="/" class="btn btn-ghost" style="padding:0.4rem 1rem;font-size:0.8rem;">← App</a>
+        </div>
     </div>
 
     <div class="admin-body">
+        <!-- Stats Tab -->
+        <div id="admin-tab-stats" class="admin-tab-content">
         <div class="stats-row" id="stats-row">
             <div class="stat-card">
                 <div class="stat-value" id="stat-total">0</div>
@@ -117,6 +123,56 @@
                 </tbody>
             </table>
             <div class="empty-state hidden" id="empty-state">No generations yet.</div>
+        </div>
+        </div><!-- end stats tab -->
+
+        <!-- Presets Tab -->
+        <div id="admin-tab-presets" class="admin-tab-content" style="display:none">
+            <div class="card" style="margin-bottom:1.5rem">
+                <h2 class="card-title" style="margin-bottom:0.5rem">Create Preset</h2>
+                <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:1rem">Define your visual style with an image, text description, or both.</p>
+                <div style="display:flex;flex-direction:column;gap:0.75rem">
+                    <div>
+                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Preset Name</label>
+                        <input type="text" id="admin-preset-name" placeholder="e.g. Family Guy + Dave" class="text-input" style="width:100%">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Tags</label>
+                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px" id="admin-tag-pills"></div>
+                        <div style="display:flex;gap:6px">
+                            <input type="text" id="admin-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
+                            <input type="color" id="admin-tag-color" value="#5B9BD5" style="width:30px;height:30px;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:1px">
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Style Description</label>
+                        <textarea id="admin-style-text" class="text-input" rows="3" placeholder="e.g. Family Guy cartoon style, thick outlines..." style="width:100%;resize:vertical"></textarea>
+                    </div>
+                    <div style="display:flex;gap:1rem">
+                        <div style="flex:1">
+                            <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Style Image</label>
+                            <input type="file" id="admin-style-file" accept=".png,.jpg,.jpeg,.webp">
+                        </div>
+                        <div style="flex:1">
+                            <label style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:4px">Subject Image <span style="font-weight:400;text-transform:none">(optional)</span></label>
+                            <input type="file" id="admin-subject-file" accept=".png,.jpg,.jpeg,.webp">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" id="admin-save-preset" style="align-self:flex-start">Save Preset</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                    <h2 class="card-title" style="margin:0">Saved Presets</h2>
+                    <div style="display:flex;gap:6px">
+                        <button class="btn btn-ghost" id="admin-export-btn" style="font-size:0.75rem;padding:0.35rem 0.8rem">Export</button>
+                        <button class="btn btn-ghost" id="admin-import-btn" style="font-size:0.75rem;padding:0.35rem 0.8rem">Import</button>
+                        <input type="file" id="admin-import-file" accept=".json" hidden>
+                    </div>
+                </div>
+                <div id="admin-preset-gallery"></div>
+            </div>
         </div>
     </div>
 
@@ -200,6 +256,136 @@
 
         loadHistory();
         loadCredits();
+
+        // Admin tabs
+        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.admin-tab-content').forEach(c => c.style.display = 'none');
+                btn.classList.add('active');
+                document.getElementById(`admin-tab-${btn.dataset.tab}`).style.display = 'block';
+                if (btn.dataset.tab === 'presets') loadAdminPresets();
+            });
+        });
+
+        // Preset management
+        let adminTags = [];
+        let adminTagColors = {};
+
+        function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+        // Tag builder
+        function renderAdminTags() {
+            const container = document.getElementById('admin-tag-pills');
+            container.innerHTML = adminTags.map(tag => {
+                const color = adminTagColors[tag] || '#5B9BD5';
+                return `<span style="font-size:0.72rem;font-weight:600;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(tag)} <button onclick="removeAdminTag('${escHtml(tag)}')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.85rem;padding:0 2px;opacity:0.6">&times;</button></span>`;
+            }).join('');
+        }
+        window.removeAdminTag = function(tag) {
+            adminTags = adminTags.filter(t => t !== tag);
+            delete adminTagColors[tag];
+            renderAdminTags();
+        };
+
+        document.getElementById('admin-tag-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const tag = e.target.value.replace(/,/g, '').trim();
+                if (tag && !adminTags.includes(tag)) {
+                    adminTags.push(tag);
+                    adminTagColors[tag] = document.getElementById('admin-tag-color').value;
+                    e.target.value = '';
+                    renderAdminTags();
+                }
+            }
+        });
+
+        // Save preset
+        document.getElementById('admin-save-preset').addEventListener('click', async () => {
+            const name = document.getElementById('admin-preset-name').value.trim() || 'Untitled';
+            const styleText = document.getElementById('admin-style-text').value.trim();
+            const styleFile = document.getElementById('admin-style-file').files[0];
+            const subjectFile = document.getElementById('admin-subject-file').files[0];
+            if (!styleFile && !styleText) { alert('Provide a style image, text description, or both.'); return; }
+            const formData = new FormData();
+            formData.append('name', name);
+            formData.append('style_text', styleText);
+            formData.append('tags', adminTags.join(','));
+            formData.append('tag_colors', JSON.stringify(adminTagColors));
+            if (styleFile) formData.append('style', styleFile);
+            if (subjectFile) formData.append('subject', subjectFile);
+            const btn = document.getElementById('admin-save-preset');
+            btn.disabled = true; btn.textContent = 'Saving...';
+            try {
+                const resp = await fetch('/api/presets', { method: 'POST', body: formData });
+                if (resp.ok) {
+                    document.getElementById('admin-preset-name').value = '';
+                    document.getElementById('admin-style-text').value = '';
+                    document.getElementById('admin-style-file').value = '';
+                    document.getElementById('admin-subject-file').value = '';
+                    adminTags = []; adminTagColors = {}; renderAdminTags();
+                    loadAdminPresets();
+                    alert('Preset saved!');
+                } else {
+                    const data = await resp.json();
+                    alert(data.error || 'Save failed');
+                }
+            } catch { alert('Save failed'); }
+            btn.disabled = false; btn.textContent = 'Save Preset';
+        });
+
+        // Load presets gallery
+        async function loadAdminPresets() {
+            const gallery = document.getElementById('admin-preset-gallery');
+            try {
+                const resp = await fetch('/api/presets');
+                const presets = await resp.json();
+                if (!presets.length) { gallery.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:2rem">No presets yet</p>'; return; }
+                gallery.innerHTML = presets.map(p => `
+                    <div style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:0.5rem;background:var(--bg-card)">
+                        <img src="/api/presets/${p.id}/style.png" style="width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid var(--border)" onerror="this.style.display='none'">
+                        <div style="flex:1;min-width:0">
+                            <div style="font-weight:600;font-size:0.88rem">${escHtml(p.name)}</div>
+                            <div style="font-size:0.72rem;color:var(--text-muted)">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text' : ''}</div>
+                            ${p.tags && p.tags.length ? `<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px">${p.tags.map(t => {
+                                const color = (p.tag_colors || {})[t] || '#5B9BD5';
+                                return `<span style="font-size:0.6rem;padding:1px 5px;border-radius:3px;font-weight:600;text-transform:uppercase;background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(t)}</span>`;
+                            }).join('')}</div>` : ''}
+                        </div>
+                        <button onclick="deleteAdminPreset('${p.id}')" class="btn btn-ghost" style="font-size:0.75rem;padding:0.3rem 0.7rem;color:var(--error)">Delete</button>
+                    </div>
+                `).join('');
+            } catch { gallery.innerHTML = '<p style="color:var(--error)">Failed to load presets</p>'; }
+        }
+
+        window.deleteAdminPreset = async function(id) {
+            if (!confirm('Delete this preset?')) return;
+            await fetch(`/api/presets/${id}`, { method: 'DELETE' });
+            loadAdminPresets();
+        };
+
+        // Export/Import
+        document.getElementById('admin-export-btn').addEventListener('click', async () => {
+            const resp = await fetch('/api/presets/export');
+            if (!resp.ok) { alert('Export failed'); return; }
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `presets-${new Date().toISOString().slice(0,10)}.json`; a.click();
+            URL.revokeObjectURL(url);
+        });
+        document.getElementById('admin-import-btn').addEventListener('click', () => document.getElementById('admin-import-file').click());
+        document.getElementById('admin-import-file').addEventListener('change', async (e) => {
+            if (!e.target.files.length) return;
+            const formData = new FormData();
+            formData.append('file', e.target.files[0]);
+            const resp = await fetch('/api/presets/import', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (resp.ok) { alert(`Imported ${data.count} preset(s)`); loadAdminPresets(); }
+            else alert(data.error || 'Import failed');
+            e.target.value = '';
+        });
     </script>
 </body>
 </html>
