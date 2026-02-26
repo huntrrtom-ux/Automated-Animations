@@ -244,7 +244,9 @@ def get_format_scene_rules(video_format, audio_duration):
             "FORMAT: FLASH (animated educational)\n\n"
             "INTRO (first ~2 minutes — flexible within ±10 seconds of the 2-minute mark):\n"
             "- ALL intro scenes must have is_video: true\n"
-            "- Scene durations: 3-8 seconds, but PRIORITISE 3-5 second scenes for high tempo\n"
+            "- Scene durations: 3-8 seconds MAXIMUM — these get animated, so keep them SHORT\n"
+            "- PRIORITISE 4-6 second scenes for high tempo\n"
+            "- NEVER exceed 8 seconds for an intro scene — split longer segments into separate scenes\n"
             "- Each intro scene needs its own unique visual matching the narration\n\n"
             "BODY (after intro):\n"
             "- ALL body scenes must have is_video: false\n"
@@ -391,7 +393,9 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             "- A scene can be a SINGLE segment or multiple consecutive segments — whatever makes visual sense\n"
             "- Start a NEW scene whenever the visual should change, even if it's just one segment\n"
             "- Group segments together ONLY when they describe the same visual idea\n"
-            "- Maximum 15 seconds per scene — if segments span longer, split into separate scenes\n"
+            "- For scenes with is_video: true (animated), MAXIMUM 8 seconds — these are animated clips with a hard length limit\n"
+            "- For scenes with is_video: false (static images), maximum 15 seconds\n"
+            "- If segments span longer than the limit, split into separate scenes\n"
             f"- You MUST use ALL segments from {first_seg_id} to {last_seg_id} with no gaps or skips\n"
             "- Every segment must belong to exactly one scene\n\n"
             "SCENE VISUAL DESCRIPTION RULES:\n"
@@ -550,12 +554,15 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         max_scene_dur = max(s['end_time'] - s['start_time'] for s in all_scenes)
         logger.info(f"Scene coverage: {gemini_total:.1f}s, Audio: {audio_duration:.1f}s, Max scene: {max_scene_dur:.1f}s")
         
-        # Split any scene longer than 15s into smaller scenes with unique prompts
+        # Split scenes exceeding duration limits: 8s for animated (is_video), 15s for static
         split_scenes = []
         for scene in all_scenes:
             dur = scene['end_time'] - scene['start_time']
-            if dur > 15.0:
-                num_parts = math.ceil(dur / 10.0)
+            is_animated = scene.get('is_video', False)
+            max_dur = 8.0 if is_animated else 15.0
+            target_dur = 6.0 if is_animated else 10.0
+            if dur > max_dur:
+                num_parts = math.ceil(dur / target_dur)
                 part_dur = dur / num_parts
                 base_desc = scene['visual_description']
                 scene_segs = [s for s in segments if s['end'] > scene['start_time'] and s['start'] < scene['end_time']]
@@ -1718,10 +1725,27 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                     add_credits(2, f'Animation (Veo) — scene {scene_num}', session_id)
                     trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_trimmed.mp4')
                     try:
-                        cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
-                               '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
-                               '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-                               trimmed]
+                        # Probe actual Veo clip duration
+                        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                                     '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+                        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+                        veo_duration = float(probe_result.stdout.strip()) if probe_result.stdout.strip() else 0
+                        logger.info(f"Veo clip scene {scene_num}: raw={veo_duration:.1f}s, needed={duration:.1f}s")
+                        
+                        if veo_duration >= duration - 0.1:
+                            # Veo clip is long enough — just trim to exact duration
+                            cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
+                                   '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
+                                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                                   trimmed]
+                        else:
+                            # Veo clip is shorter than scene — slow it down to fill the duration
+                            speed_factor = veo_duration / duration if veo_duration > 0 else 1.0
+                            logger.info(f"Veo clip scene {scene_num}: stretching {veo_duration:.1f}s → {duration:.1f}s (speed={speed_factor:.2f}x)")
+                            cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
+                                   '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
+                                   '-vf', f'setpts={1/speed_factor:.4f}*PTS,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                                   trimmed]
                         subprocess.run(cmd, check=True, capture_output=True, timeout=120)
                         return i, trimmed
                     except:
