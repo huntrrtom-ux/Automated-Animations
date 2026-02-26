@@ -513,6 +513,34 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                         f"{chunk_time_start:.1f}s-{chunk_time_end:.1f}s")
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in chunk {chunk_num}: {e}")
+            # Retry the entire chunk once on JSON parse failure
+            logger.info(f"Retrying chunk {chunk_num} after JSON parse error...")
+            try:
+                retry_resp = client.chat.completions.create(
+                    model=scene_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg}
+                    ],
+                    temperature=0.3, max_tokens=32000
+                )
+                retry_text = retry_resp.choices[0].message.content.strip()
+                if retry_text.startswith('```'):
+                    retry_text = retry_text.split('\n', 1)[1]
+                    if retry_text.endswith('```'):
+                        retry_text = retry_text[:-3]
+                retry_chunk = json.loads(retry_text)
+                for scene in retry_chunk.get('scenes', []):
+                    scene['scene_number'] = len(all_scenes) + 1
+                    seg_s = scene.get('segment_start')
+                    seg_e = scene.get('segment_end')
+                    if seg_s and seg_e and seg_s in seg_lookup and seg_e in seg_lookup:
+                        scene['start_time'] = seg_lookup[seg_s]['start']
+                        scene['end_time'] = seg_lookup[seg_e]['end']
+                        all_scenes.append(scene)
+                logger.info(f"Chunk {chunk_num} retry succeeded: {len(retry_chunk.get('scenes', []))} scenes")
+            except Exception as retry_e:
+                logger.error(f"Chunk {chunk_num} retry also failed: {retry_e}")
     
     # Log output
     if all_scenes:
@@ -554,13 +582,20 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         max_scene_dur = max(s['end_time'] - s['start_time'] for s in all_scenes)
         logger.info(f"Scene coverage: {gemini_total:.1f}s, Audio: {audio_duration:.1f}s, Max scene: {max_scene_dur:.1f}s")
         
-        # Split scenes exceeding duration limits: 8s for animated (is_video), 15s for static
+        # Split scenes exceeding duration limits: 8s for animated, 15s for static
+        # Determine which scenes will be animated based on format rules (not Gemini's is_video which gets overridden later)
         split_scenes = []
         for scene in all_scenes:
             dur = scene['end_time'] - scene['start_time']
-            is_animated = scene.get('is_video', False)
-            max_dur = 8.0 if is_animated else 15.0
-            target_dur = 6.0 if is_animated else 10.0
+            # Predict if this scene will be animated based on format rules
+            if video_format == 'flash':
+                will_be_animated = scene['start_time'] < 120.0
+            elif video_format == 'pulse':
+                will_be_animated = scene['start_time'] < 30.0
+            else:
+                will_be_animated = False
+            max_dur = 8.0 if will_be_animated else 15.0
+            target_dur = 6.0 if will_be_animated else 10.0
             if dur > max_dur:
                 num_parts = math.ceil(dur / target_dur)
                 part_dur = dur / num_parts
