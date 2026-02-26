@@ -864,40 +864,18 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             }
         })
 
-    # Build style instruction from text + image
+    # Build style instruction — keep it clean and simple like browser UI
     style_text = whisk_session.get('style_text', '')
     has_style_image = whisk_session.get('style_media_id') is not None
     
-    if has_style_image and style_text:
-        # Both image and text — strongest combination
-        styled_prompt = (
-            f"ABSOLUTE STYLE LOCK: You MUST match the exact art style from the style reference image. "
-            f"Additional style details: {style_text}. "
-            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
-            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
-            f"If unsure, make it MORE stylized, not less. "
-            f"The scene to create: {prompt}"
-        )
-    elif style_text:
-        # Text only — no style image
-        styled_prompt = (
-            f"ABSOLUTE STYLE LOCK — ART STYLE: {style_text}. "
-            f"Apply this style consistently to every element. "
-            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
-            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
-            f"If unsure, make it MORE stylized, not less. "
-            f"The scene to create: {prompt}"
-        )
+    # The style and subject are already communicated via recipeMediaInputs captions.
+    # userInstruction should just be the scene description, clean and direct.
+    if style_text and not has_style_image:
+        # Text-only style — include style hint since there's no style image
+        styled_prompt = f"{style_text} style. {prompt}"
     else:
-        # Image only
-        styled_prompt = (
-            f"ABSOLUTE STYLE LOCK: Match the exact art style from the style reference — "
-            f"same line work, coloring, shading, detail level. "
-            f"FORBIDDEN: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo, photograph. "
-            f"CRITICAL: Do NOT render ANY text, letters, numbers, words, labels, signs, or writing anywhere in the image. "
-            f"If unsure, make it MORE stylized, not less. "
-            f"The scene to create: {prompt}"
-        )
+        # Style image handles the style — just send the scene prompt
+        styled_prompt = prompt
 
     json_data = {
         "clientContext": {"workflowId": workflow_id, "tool": "BACKBONE", "sessionId": session_ts},
