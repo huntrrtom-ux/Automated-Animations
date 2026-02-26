@@ -730,7 +730,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
     if preset_config.get('style_base64'):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
-        auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_SCENE", workflow_id, session_ts)
+        auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts)
         style_caption = (
             "ABSOLUTE STYLE LOCK. Every generated image MUST exactly match this art style: "
             "the line work, outlines, color palette, shading technique, and rendering aesthetic. "
@@ -745,7 +745,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
-        style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_SCENE", style_caption, workflow_id, session_ts)
+        style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", style_caption, workflow_id, session_ts)
         if style_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
         result['style_media_id'] = style_id
@@ -859,7 +859,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         recipe_inputs.append({
             "caption": whisk_session.get('style_caption', 'Art style reference only — match visual style not content'),
             "mediaInput": {
-                "mediaCategory": "MEDIA_CATEGORY_SCENE",
+                "mediaCategory": "MEDIA_CATEGORY_STYLE",
                 "mediaGenerationId": whisk_session['style_media_id']
             }
         })
