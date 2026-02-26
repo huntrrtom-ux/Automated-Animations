@@ -775,18 +775,53 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     return result
 
 
+# ===================== PROMPT REPHRASING FOR FAILED SCENES =====================
+def rephrase_prompt(original_prompt):
+    """Use Gemini to rephrase a visual description that triggered safety filters."""
+    try:
+        api_key = GEMINI_API_KEY or OPENAI_API_KEY
+        if GEMINI_API_KEY:
+            client = openai.OpenAI(api_key=GEMINI_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+            model = "gemini-2.5-flash"
+        else:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            model = "gpt-4o-mini"
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You rephrase image generation prompts that were blocked by safety filters. "
+                 "Rewrite the visual description to convey the same scene but using softer, safer language. "
+                 "Avoid any words related to violence, danger, medical procedures, distress, or anything potentially sensitive. "
+                 "Keep it as a simple visual scene description. Return ONLY the rephrased prompt, nothing else."},
+                {"role": "user", "content": f"This image prompt was blocked by a safety filter. Rephrase it:\n\n{original_prompt}"}
+            ],
+            max_tokens=200,
+            temperature=0.7
+        )
+        rephrased = response.choices[0].message.content.strip()
+        logger.info(f"Rephrased prompt: '{original_prompt[:60]}...' → '{rephrased[:60]}...'")
+        return rephrased
+    except Exception as e:
+        logger.warning(f"Prompt rephrase failed: {e}")
+        return original_prompt
+
+
 # ===================== WHISK IMAGE GENERATION =====================
 def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
     # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
+        current_prompt = prompt
         for attempt in range(3):
-            result = generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
+            result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
             if result == "TOKEN_EXPIRED":
                 return result
             if result is not None:
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num}")
+                # Rephrase prompt after first failure to avoid hitting same safety filter
+                current_prompt = rephrase_prompt(current_prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
@@ -1562,8 +1597,9 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 scene_has_subject = scene.get('has_subject', False) and has_subject
                 img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
                 
-                logger.info(f"Retrying scene {scene_num}...")
-                result = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                logger.info(f"Retrying scene {scene_num} with rephrased prompt...")
+                rephrased = rephrase_prompt(scene['visual_description'])
+                result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                 
                 if result == "TOKEN_EXPIRED":
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
