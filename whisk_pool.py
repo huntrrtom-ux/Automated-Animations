@@ -55,8 +55,18 @@ class WhiskPool:
             if self.keys:
                 return
 
-        # Format 2: Numbered WHISK_KEY_1, WHISK_COOKIE_1, etc.
-        for i in range(1, 11):  # support up to 10 keys
+        # Always check for original WHISK_API_KEY / WHISK_COOKIE first
+        orig_token = os.environ.get('WHISK_API_KEY') or os.environ.get('WHISK_API_TOKEN') or ''
+        orig_cookie = os.environ.get('WHISK_COOKIE', '')
+        if orig_token or orig_cookie:
+            self.keys.append({
+                'token': orig_token,
+                'cookie': orig_cookie,
+                'cooldown_until': 0
+            })
+
+        # Then add any numbered keys (WHISK_KEY_1, WHISK_COOKIE_1, etc.)
+        for i in range(1, 11):  # support up to 10 extra keys
             token = os.environ.get(f'WHISK_KEY_{i}', '')
             cookie = os.environ.get(f'WHISK_COOKIE_{i}', '')
             if token or cookie:
@@ -65,18 +75,6 @@ class WhiskPool:
                     'cookie': cookie,
                     'cooldown_until': 0
                 })
-        if self.keys:
-            return
-
-        # Format 3: Original single key (backwards compatible)
-        token = os.environ.get('WHISK_API_KEY') or os.environ.get('WHISK_API_TOKEN') or ''
-        cookie = os.environ.get('WHISK_COOKIE', '')
-        if token or cookie:
-            self.keys.append({
-                'token': token,
-                'cookie': cookie,
-                'cooldown_until': 0
-            })
 
     def get_next(self):
         """Get the next available key (skipping cooled-down ones).
