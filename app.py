@@ -684,30 +684,48 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
     return all_scenes
 
 
-# ===================== WHISK AUTH =====================
-def get_whisk_token():
-    return os.environ.get('WHISK_API_KEY') or os.environ.get('WHISK_API_TOKEN') or ''
+# ===================== WHISK AUTH (POOL) =====================
+from whisk_pool import WhiskPool
+whisk_pool = WhiskPool()
 
-def get_whisk_cookie():
-    return os.environ.get('WHISK_COOKIE') or ''
+def get_whisk_key():
+    """Get next available Whisk key from pool. Returns dict with token, cookie, index."""
+    key = whisk_pool.get_next()
+    if not key:
+        logger.error("No Whisk keys configured!")
+        return None
+    if key.get('wait_seconds', 0) > 0:
+        wait = min(key['wait_seconds'], 30)
+        logger.info(f"All keys cooling down, waiting {wait:.0f}s for key {key['index']+1}/{len(whisk_pool)}")
+        time.sleep(wait)
+    return key
 
-def whisk_bearer_headers():
+def whisk_bearer_headers_for(key):
     return {
-        "authorization": f"Bearer {get_whisk_token()}",
+        "authorization": f"Bearer {key['token']}",
         "content-type": "application/json",
         "origin": "https://labs.google",
         "referer": "https://labs.google/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
     }
 
-def whisk_cookie_headers():
+def whisk_cookie_headers_for(key):
     return {
         "content-type": "application/json",
-        "cookie": get_whisk_cookie(),
+        "cookie": key['cookie'],
         "origin": "https://labs.google",
         "referer": "https://labs.google/fx/tools/whisk",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
     }
+
+# Backwards-compatible wrappers (used by functions that don't yet pass key around)
+def whisk_bearer_headers():
+    key = get_whisk_key()
+    return whisk_bearer_headers_for(key) if key else {}
+
+def whisk_cookie_headers():
+    key = get_whisk_key()
+    return whisk_cookie_headers_for(key) if key else {}
 
 
 # ===================== WHISK CAPTION & UPLOAD =====================
@@ -911,9 +929,11 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
 
 
 def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject=False):
-    token = get_whisk_token()
+    key = get_whisk_key()
+    if not key:
+        return None
     headers = {
-        "authorization": f"Bearer {token}",
+        "authorization": f"Bearer {key['token']}",
         "content-type": "text/plain;charset=UTF-8",
         "origin": "https://labs.google",
         "referer": "https://labs.google/",
@@ -962,7 +982,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         "userInstruction": styled_prompt
     }
 
-    logger.info(f"Whisk runImageRecipe for scene {scene_num} (subject={scene_has_subject}, inputs={len(recipe_inputs)})")
+    logger.info(f"Whisk runImageRecipe for scene {scene_num} (subject={scene_has_subject}, inputs={len(recipe_inputs)}, key={key['index']+1}/{len(whisk_pool)})")
     try:
         response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
                             data=json.dumps(json_data), headers=headers, timeout=120)
@@ -971,22 +991,33 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         return None
     logger.info(f"Whisk recipe response for scene {scene_num}: {response.status_code}")
 
-    # Token expired — wait and retry with fresh env vars (allows mid-generation token update)
+    # Token expired — mark key and try next one from pool
     if response.status_code == 401:
-        logger.warning(f"Token expired at scene {scene_num}. Waiting 60s for token refresh...")
-        emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
-        time.sleep(60)
-        # Re-read headers from env vars (picks up Railway variable changes)
-        fresh_headers = whisk_cookie_headers()
-        try:
-            response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
-                                data=json.dumps(json_data), headers=fresh_headers, timeout=120)
-        except (ConnectionError, Exception) as e:
-            logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
-            return None
-        logger.info(f"Whisk retry after token refresh for scene {scene_num}: {response.status_code}")
-        if response.status_code == 401:
+        logger.warning(f"Token expired at scene {scene_num} (key {key['index']+1}). Trying next key...")
+        whisk_pool.mark_expired(key['index'])
+        next_key = get_whisk_key()
+        if next_key:
+            headers["authorization"] = f"Bearer {next_key['token']}"
+            key = next_key
+            emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...')
+            try:
+                response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                                    data=json.dumps(json_data), headers=headers, timeout=120)
+            except (ConnectionError, Exception) as e:
+                logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
+                return None
+            logger.info(f"Whisk retry with key {key['index']+1} for scene {scene_num}: {response.status_code}")
+            if response.status_code == 401:
+                whisk_pool.mark_expired(key['index'])
+                return "TOKEN_EXPIRED"
+        else:
+            emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
+            time.sleep(60)
+            whisk_pool.reload_from_env()
             return "TOKEN_EXPIRED"
+    if response.status_code == 429:
+        logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
+        whisk_pool.mark_cooldown(key['index'], seconds=60)
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
@@ -1024,7 +1055,10 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
 # ===================== ANIMATION =====================
 def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
-    headers = whisk_bearer_headers()
+    key = get_whisk_key()
+    if not key:
+        return False
+    headers = whisk_bearer_headers_for(key)
     session_ts = f";{int(time.time() * 1000)}"
     raw_bytes = image_info.get("encoded_image", "")
     if raw_bytes and "," in raw_bytes[:100]:
@@ -1047,8 +1081,13 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
             continue
         logger.info(f"Animate response scene {scene_num}: status={response.status_code} (attempt {attempt+1})")
         if response.status_code == 401:
+            whisk_pool.mark_expired(key['index'])
             return "TOKEN_EXPIRED"
         if response.status_code == 429:
+            whisk_pool.mark_cooldown(key['index'], seconds=30 * (attempt + 1))
+            key = get_whisk_key()
+            if key:
+                headers = whisk_bearer_headers_for(key)
             time.sleep(30 * (attempt + 1))
             continue
         if response.status_code != 200:
@@ -2032,6 +2071,22 @@ def admin_credits_set():
     return jsonify({'ok': True, 'used': amount})
 
 
+@app.route('/admin/whisk-pool')
+def admin_whisk_pool():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify(whisk_pool.status())
+
+@app.route('/admin/whisk-pool/reload', methods=['POST'])
+def admin_whisk_pool_reload():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    whisk_pool.reload_from_env()
+    return jsonify({'ok': True, 'pool': whisk_pool.status()})
+
+
 # ===================== ROUTES =====================
 @app.route('/')
 def index():
@@ -2469,7 +2524,7 @@ def version():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY), 'gemini': bool(GEMINI_API_KEY),
-                    'whisk_token': bool(get_whisk_token()), 'whisk_cookie': bool(get_whisk_cookie())})
+                    'whisk_keys': len(whisk_pool), 'whisk_pool': whisk_pool.status()})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
