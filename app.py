@@ -3,6 +3,8 @@ import json
 import time
 import uuid
 import math
+import copy
+import shutil
 import subprocess
 import logging
 import random
@@ -28,11 +30,13 @@ PERSISTENT_DIR = '/data' if os.path.isdir('/data') else os.path.dirname(os.path.
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 app.config['OUTPUT_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs')
 app.config['PRESET_FOLDER'] = os.path.join(PERSISTENT_DIR, 'presets')
+app.config['CHANNEL_FOLDER'] = os.path.join(PERSISTENT_DIR, 'channels')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PRESET_FOLDER'], exist_ok=True)
+os.makedirs(app.config['CHANNEL_FOLDER'], exist_ok=True)
 
 logger.info(f"Persistent storage: {PERSISTENT_DIR} ({'Railway volume' if PERSISTENT_DIR == '/data' else 'local'})")
 
@@ -57,8 +61,222 @@ def emit_progress(session_id, step, progress, message, data=None):
     logger.info(f"[{session_id}] {step}: {message} ({progress}%)")
 
 
-# ===================== PRESET MANAGEMENT =====================
-def get_preset_order():
+# ===================== BASE FORMAT DEFINITIONS =====================
+# Each channel gets a deep copy of one of these as its standalone format.
+# Changes to a channel's format never affect these defaults.
+BASE_FORMATS = {
+    'pulse': {
+        'base': 'pulse',
+        'label': 'Pulse',
+        'description': 'Fast-paced entertainment',
+        'intro_duration': 30,
+        'intro_animated': True,
+        'intro_scene_min_duration': 1,
+        'intro_scene_max_duration': 8,
+        'body_scene_min_duration': 2,
+        'body_scene_max_duration': 10,
+        'body_animated': False,
+        'periodic_animation_interval': 600,
+        'periodic_animation_window': 30,
+        'ken_burns_effect': 'rotate_pulse',
+        'subject_mode': 'auto',
+        'subject_interval': 0,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 10,
+    },
+    'flash': {
+        'base': 'flash',
+        'label': 'Flash',
+        'description': 'Animated educational',
+        'intro_duration': 120,
+        'intro_animated': True,
+        'intro_scene_min_duration': 3,
+        'intro_scene_max_duration': 8,
+        'body_scene_min_duration': 5,
+        'body_scene_max_duration': 15,
+        'body_animated': False,
+        'periodic_animation_interval': 0,
+        'periodic_animation_window': 0,
+        'ken_burns_effect': 'none',
+        'subject_mode': 'all',
+        'subject_interval': 0,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 15,
+    },
+    'deep': {
+        'base': 'deep',
+        'label': 'Deep',
+        'description': 'Longform educational',
+        'intro_duration': 60,
+        'intro_animated': False,
+        'intro_scene_min_duration': 2,
+        'intro_scene_max_duration': 10,
+        'body_scene_min_duration': 2,
+        'body_scene_max_duration': 15,
+        'body_scene_min_duration_first_half': 2,
+        'body_scene_max_duration_first_half': 7,
+        'body_scene_min_duration_second_half': 8,
+        'body_scene_max_duration_second_half': 15,
+        'body_animated': False,
+        'periodic_animation_interval': 0,
+        'periodic_animation_window': 0,
+        'ken_burns_effect': 'none',
+        'subject_mode': 'sparse',
+        'subject_interval': 300,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 15,
+    },
+}
+
+
+# ===================== CHANNEL MANAGEMENT =====================
+def get_channel_registry():
+    registry_path = os.path.join(app.config['CHANNEL_FOLDER'], '_registry.json')
+    if os.path.exists(registry_path):
+        try:
+            with open(registry_path, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return []
+
+def save_channel_registry(order):
+    registry_path = os.path.join(app.config['CHANNEL_FOLDER'], '_registry.json')
+    with open(registry_path, 'w') as f:
+        json.dump(order, f)
+
+def get_all_channels():
+    channels = []
+    channel_dir = app.config['CHANNEL_FOLDER']
+    channel_map = {}
+    for name in os.listdir(channel_dir):
+        if name.startswith('_') or not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                config['id'] = name
+                config['has_logo'] = os.path.exists(os.path.join(channel_dir, name, 'logo.png'))
+                channel_map[name] = config
+            except Exception as e:
+                logger.error(f"Failed to load channel {name}: {e}")
+    order = get_channel_registry()
+    for cid in order:
+        if cid in channel_map:
+            channels.append(channel_map.pop(cid))
+    for cid in sorted(channel_map.keys()):
+        channels.append(channel_map[cid])
+    return channels
+
+def get_channel(channel_id):
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(channel_dir, 'config.json')
+    if not os.path.exists(config_path):
+        return None
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    config['id'] = channel_id
+    config['has_logo'] = os.path.exists(os.path.join(channel_dir, 'logo.png'))
+    style_path = os.path.join(channel_dir, 'style.png')
+    if os.path.exists(style_path):
+        with open(style_path, 'rb') as f:
+            config['style_base64'] = base64.b64encode(f.read()).decode('utf-8')
+    subject_path = os.path.join(channel_dir, 'subject.png')
+    if os.path.exists(subject_path):
+        with open(subject_path, 'rb') as f:
+            config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
+    return config
+
+def save_channel(name, base_format='pulse', style_data=None, subject_data=None, logo_data=None,
+                 style_text='', tags='', tag_colors=None, scene_instructions='', image_instructions=''):
+    channel_id = 'ch_' + str(uuid.uuid4())[:8]
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    os.makedirs(channel_dir, exist_ok=True)
+    if style_data:
+        with open(os.path.join(channel_dir, 'style.png'), 'wb') as f:
+            f.write(base64.b64decode(style_data))
+    if subject_data:
+        with open(os.path.join(channel_dir, 'subject.png'), 'wb') as f:
+            f.write(base64.b64decode(subject_data))
+    if logo_data:
+        with open(os.path.join(channel_dir, 'logo.png'), 'wb') as f:
+            f.write(base64.b64decode(logo_data))
+    tag_list = [t.strip() for t in tags.split(',') if t.strip()] if isinstance(tags, str) else (tags or [])
+    format_config = copy.deepcopy(BASE_FORMATS.get(base_format, BASE_FORMATS['pulse']))
+    config = {
+        'name': name,
+        'tags': tag_list,
+        'tag_colors': tag_colors or {},
+        'style_text': style_text,
+        'scene_instructions': scene_instructions,
+        'image_instructions': image_instructions,
+        'format': format_config,
+        'has_style_image': style_data is not None,
+        'has_subject': subject_data is not None,
+        'created_at': time.strftime('%Y-%m-%d %H:%M'),
+        'updated_at': time.strftime('%Y-%m-%d %H:%M'),
+    }
+    with open(os.path.join(channel_dir, 'config.json'), 'w') as f:
+        json.dump(config, f, indent=2)
+    registry = get_channel_registry()
+    registry.append(channel_id)
+    save_channel_registry(registry)
+    return channel_id
+
+def update_channel(channel_id, **fields):
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(channel_dir, 'config.json')
+    if not os.path.exists(config_path):
+        return False
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    for key in ['name', 'tags', 'tag_colors', 'style_text', 'scene_instructions', 'image_instructions']:
+        if key in fields and fields[key] is not None:
+            config[key] = fields[key]
+    if 'format' in fields and fields['format'] is not None:
+        config['format'] = fields['format']
+    if fields.get('style_data'):
+        with open(os.path.join(channel_dir, 'style.png'), 'wb') as f:
+            f.write(base64.b64decode(fields['style_data']))
+        config['has_style_image'] = True
+    if fields.get('subject_data'):
+        with open(os.path.join(channel_dir, 'subject.png'), 'wb') as f:
+            f.write(base64.b64decode(fields['subject_data']))
+        config['has_subject'] = True
+    if fields.get('logo_data'):
+        with open(os.path.join(channel_dir, 'logo.png'), 'wb') as f:
+            f.write(base64.b64decode(fields['logo_data']))
+    if fields.get('remove_subject'):
+        subject_path = os.path.join(channel_dir, 'subject.png')
+        if os.path.exists(subject_path):
+            os.remove(subject_path)
+        config['has_subject'] = False
+    if fields.get('remove_logo'):
+        logo_path = os.path.join(channel_dir, 'logo.png')
+        if os.path.exists(logo_path):
+            os.remove(logo_path)
+    config['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    return True
+
+def delete_channel(channel_id):
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    if os.path.exists(channel_dir):
+        shutil.rmtree(channel_dir)
+        registry = get_channel_registry()
+        if channel_id in registry:
+            registry.remove(channel_id)
+            save_channel_registry(registry)
+        return True
+    return False
+
+
+# ===================== PRESET MIGRATION =====================
+def _get_preset_order():
+    """Read old preset order for migration only."""
     order_path = os.path.join(app.config['PRESET_FOLDER'], '_order.json')
     if os.path.exists(order_path):
         try:
@@ -68,35 +286,90 @@ def get_preset_order():
             pass
     return []
 
-def save_preset_order(order):
-    order_path = os.path.join(app.config['PRESET_FOLDER'], '_order.json')
-    with open(order_path, 'w') as f:
-        json.dump(order, f)
+def migrate_presets_to_channels():
+    """One-time migration: convert /data/presets/ to /data/channels/."""
+    registry_path = os.path.join(app.config['CHANNEL_FOLDER'], '_registry.json')
+    if os.path.exists(registry_path):
+        return  # Already migrated
 
-def get_all_presets():
-    presets = []
     preset_dir = app.config['PRESET_FOLDER']
-    preset_map = {}
+    if not os.path.isdir(preset_dir):
+        save_channel_registry([])
+        return
+
+    logger.info("=== MIGRATING PRESETS TO CHANNELS ===")
+    order = _get_preset_order()
+    preset_ids = []
     for name in os.listdir(preset_dir):
         if name.startswith('_'):
             continue
-        config_path = os.path.join(preset_dir, name, 'config.json')
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            config['id'] = name
-            preset_map[name] = config
-    # Sort by saved order, then append any new ones
-    order = get_preset_order()
-    for pid in order:
-        if pid in preset_map:
-            presets.append(preset_map.pop(pid))
-    # Append remaining (new presets not yet in order)
-    for pid in sorted(preset_map.keys()):
-        presets.append(preset_map[pid])
-    return presets
+        if os.path.exists(os.path.join(preset_dir, name, 'config.json')):
+            preset_ids.append(name)
 
+    ordered = [pid for pid in order if pid in preset_ids]
+    for pid in preset_ids:
+        if pid not in ordered:
+            ordered.append(pid)
+
+    if not ordered:
+        save_channel_registry([])
+        logger.info("No presets to migrate")
+        return
+
+    channel_ids = []
+    for preset_id in ordered:
+        preset_path = os.path.join(preset_dir, preset_id)
+        config_path = os.path.join(preset_path, 'config.json')
+        try:
+            with open(config_path) as f:
+                preset_config = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to read preset {preset_id}: {e}")
+            continue
+
+        channel_id = f'ch_{preset_id}'
+        channel_path = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+        os.makedirs(channel_path, exist_ok=True)
+
+        for img_name in ['style.png', 'subject.png']:
+            src = os.path.join(preset_path, img_name)
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(channel_path, img_name))
+
+        channel_config = {
+            'name': preset_config.get('name', 'Untitled'),
+            'tags': preset_config.get('tags', []),
+            'tag_colors': preset_config.get('tag_colors', {}),
+            'style_text': preset_config.get('style_text', ''),
+            'scene_instructions': '',
+            'image_instructions': '',
+            'format': copy.deepcopy(BASE_FORMATS['pulse']),
+            'has_style_image': preset_config.get('has_style_image', False),
+            'has_subject': preset_config.get('has_subject', False),
+            'created_at': preset_config.get('created_at', time.strftime('%Y-%m-%d %H:%M')),
+            'updated_at': time.strftime('%Y-%m-%d %H:%M'),
+            'migrated_from_preset': preset_id,
+        }
+        with open(os.path.join(channel_path, 'config.json'), 'w') as f:
+            json.dump(channel_config, f, indent=2)
+        channel_ids.append(channel_id)
+        logger.info(f"  Migrated preset '{preset_config.get('name')}' -> {channel_id}")
+
+    save_channel_registry(channel_ids)
+    logger.info(f"=== MIGRATION COMPLETE: {len(channel_ids)} channels ===")
+
+# Run migration on startup
+migrate_presets_to_channels()
+
+
+# ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
+    """Backward-compatible: loads a channel, falling back to old preset dir."""
+    channel_id = f'ch_{preset_id}' if not preset_id.startswith('ch_') else preset_id
+    result = get_channel(channel_id)
+    if result:
+        return result
+    # Fallback: try old preset directory directly
     preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
     config_path = os.path.join(preset_dir, 'config.json')
     if not os.path.exists(config_path):
@@ -112,35 +385,6 @@ def get_preset(preset_id):
         with open(subject_path, 'rb') as f:
             config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
     return config
-
-def save_preset(name, style_data=None, subject_data=None, style_text='', tags='', tag_colors=None):
-    preset_id = str(uuid.uuid4())[:8]
-    preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
-    os.makedirs(preset_dir, exist_ok=True)
-    if style_data:
-        style_bytes = base64.b64decode(style_data)
-        with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
-            f.write(style_bytes)
-    tag_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
-    config = {'name': name, 'has_subject': subject_data is not None,
-              'has_style_image': style_data is not None, 'style_text': style_text,
-              'tags': tag_list, 'tag_colors': tag_colors or {},
-              'created_at': time.strftime('%Y-%m-%d %H:%M')}
-    if subject_data:
-        subject_bytes = base64.b64decode(subject_data)
-        with open(os.path.join(preset_dir, 'subject.png'), 'wb') as f:
-            f.write(subject_bytes)
-    with open(os.path.join(preset_dir, 'config.json'), 'w') as f:
-        json.dump(config, f, indent=2)
-    return preset_id
-
-def delete_preset(preset_id):
-    import shutil
-    preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
-    if os.path.exists(preset_dir):
-        shutil.rmtree(preset_dir)
-        return True
-    return False
 
 
 # ===================== AUDIO =====================
@@ -217,80 +461,89 @@ def transcribe_audio(filepath, session_id):
 
 
 # ===================== SCENE DETECTION =====================
-def get_format_scene_rules(video_format, audio_duration):
-    """Return format-specific scene rules for GPT prompt."""
-    if video_format == 'pulse':
-        return (
-            "FORMAT: PULSE (fast-paced entertainment)\n\n"
-            "INTRO (first ~30 seconds — flexible, end at the nearest natural scene break):\n"
-            "- ALL intro scenes must have is_video: true\n"
-            "- Prioritise SHORT SNAPPY scenes: 1-4 seconds each\n"
-            "- Include ONE hero scene that is 5-8 seconds long\n"
-            "- Each intro scene needs its own unique visual matching the narration\n\n"
-            "BODY (after intro):\n"
-            "- ALL body scenes must have is_video: false\n"
-            "- Create a NEW scene every 2-6 seconds — keep it fast-paced\n"
-            "- NEVER exceed 10 seconds for any single scene\n"
-            "- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every 10-minute mark "
-            "(can be anywhere within ±30 seconds of each 10-min mark)\n\n"
-            "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
-        )
-    elif video_format == 'flash':
-        return (
-            "FORMAT: FLASH (animated educational)\n\n"
-            "INTRO (first ~2 minutes — flexible within ±10 seconds of the 2-minute mark):\n"
-            "- ALL intro scenes must have is_video: true\n"
-            "- Scene durations: 3-8 seconds MAXIMUM — these get animated, so keep them SHORT\n"
-            "- PRIORITISE 4-6 second scenes for high tempo\n"
-            "- NEVER exceed 8 seconds for an intro scene — split longer segments into separate scenes\n"
-            "- Each intro scene needs its own unique visual matching the narration\n\n"
-            "BODY (after intro):\n"
-            "- ALL body scenes must have is_video: false\n"
-            "- Create a NEW scene every 5-15 seconds based on what the narrator is saying\n"
-            "- Short scenes (5-7s) when narrator makes quick points or transitions\n"
-            "- Longer scenes (10-15s) when narrator explains one concept in depth\n"
-            "- NEVER exceed 15 seconds for any single scene\n"
-            "- NO animated scenes after intro\n\n"
-            "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
-        )
-    elif video_format == 'deep':
-        mid_point = audio_duration / 2 if audio_duration else 1800
-        return (
-            "FORMAT: DEEP (longform educational, ~60 minutes)\n\n"
-            "INTRO (first ~45-60 seconds — analyse the transcript to find where the hook ends):\n"
-            "- NO animated scenes — all is_video: false\n"
-            "- Scene durations: 2-10 seconds\n"
-            "- FRONT-LOAD with short snappy 2-4 second scenes for the first ~40 seconds\n"
-            "- The last few intro scenes can be slightly longer (5-10s)\n\n"
-            f"FIRST HALF (intro to ~{mid_point:.0f}s):\n"
-            "- Create a NEW scene every 2-7 seconds, PRIORITISE shorter scenes to maintain momentum\n"
-            "- All is_video: false\n\n"
-            f"SECOND HALF (~{mid_point:.0f}s to end):\n"
-            "- Create a NEW scene every 8-15 seconds, more relaxed pacing\n"
-            "- NEVER exceed 15 seconds for any single scene\n"
-            "- All is_video: false\n\n"
-            "COVERAGE:\n"
-            "- Every segment MUST belong to exactly one scene — NO segments left out\n"
-            "- Scene groupings MUST be consecutive — no skipping segments\n"
-            "- The FIRST scene MUST include the first segment\n"
-            "- The LAST scene MUST include the last segment\n"
-        )
-    return ""
+def get_format_scene_rules(format_config, audio_duration):
+    """Build scene rules prompt dynamically from a channel's format config dict."""
+    if isinstance(format_config, str):
+        # Backward compat: if a string was passed, look up the base format
+        format_config = BASE_FORMATS.get(format_config, BASE_FORMATS['pulse'])
 
-def get_format_subject_rules(video_format, has_subject):
-    """Return format-specific subject/character rules."""
+    label = format_config.get('label', format_config.get('base', 'Custom')).upper()
+    desc = format_config.get('description', '')
+    intro_dur = format_config.get('intro_duration', 30)
+    intro_animated = format_config.get('intro_animated', False)
+    intro_min = format_config.get('intro_scene_min_duration', 2)
+    intro_max = format_config.get('intro_scene_max_duration', 8)
+    body_min = format_config.get('body_scene_min_duration', 5)
+    body_max = format_config.get('body_scene_max_duration', 15)
+    body_animated = format_config.get('body_animated', False)
+    periodic_interval = format_config.get('periodic_animation_interval', 0)
+    periodic_window = format_config.get('periodic_animation_window', 30)
+    max_scene = format_config.get('max_scene_duration', 15)
+
+    # Deep format has split body durations for first/second half
+    body_min_first = format_config.get('body_scene_min_duration_first_half')
+    body_max_first = format_config.get('body_scene_max_duration_first_half')
+    body_min_second = format_config.get('body_scene_min_duration_second_half')
+    body_max_second = format_config.get('body_scene_max_duration_second_half')
+    has_split_body = (body_min_first is not None and body_max_first is not None
+                      and body_min_second is not None and body_max_second is not None)
+
+    intro_video_str = "ALL intro scenes must have is_video: true" if intro_animated else "ALL intro scenes must have is_video: false (no animation)"
+    body_video_str = "ALL body scenes must have is_video: true" if body_animated else "ALL body scenes must have is_video: false"
+
+    rules = f"FORMAT: {label}"
+    if desc:
+        rules += f" ({desc})"
+    rules += "\n\n"
+
+    rules += f"INTRO (first ~{intro_dur} seconds — flexible, end at the nearest natural scene break):\n"
+    rules += f"- {intro_video_str}\n"
+    rules += f"- Scene durations: {intro_min}-{intro_max} seconds\n"
+    if intro_animated:
+        rules += f"- NEVER exceed {intro_max} seconds for an intro scene — these get animated, keep them SHORT\n"
+    rules += "- Each intro scene needs its own unique visual matching the narration\n\n"
+
+    if has_split_body:
+        mid_point = audio_duration / 2 if audio_duration else 1800
+        rules += f"FIRST HALF (intro to ~{mid_point:.0f}s):\n"
+        rules += f"- Create a NEW scene every {body_min_first}-{body_max_first} seconds, PRIORITISE shorter scenes to maintain momentum\n"
+        rules += f"- {body_video_str}\n\n"
+        rules += f"SECOND HALF (~{mid_point:.0f}s to end):\n"
+        rules += f"- Create a NEW scene every {body_min_second}-{body_max_second} seconds, more relaxed pacing\n"
+        rules += f"- NEVER exceed {max_scene} seconds for any single scene\n"
+        rules += f"- {body_video_str}\n\n"
+    else:
+        rules += "BODY (after intro):\n"
+        rules += f"- {body_video_str}\n"
+        rules += f"- Create a NEW scene every {body_min}-{body_max} seconds\n"
+        rules += f"- NEVER exceed {max_scene} seconds for any single scene\n"
+        if periodic_interval > 0:
+            interval_min = periodic_interval // 60
+            rules += (f"- EXCEPTION: Place ONE animated scene (is_video: true, 4-8 seconds) near every "
+                      f"{interval_min}-minute mark (can be anywhere within ±{periodic_window} seconds of each mark)\n")
+        rules += "\n"
+
+    rules += (
+        "COVERAGE:\n"
+        "- Every segment MUST belong to exactly one scene — NO segments left out\n"
+        "- Scene groupings MUST be consecutive — no skipping segments\n"
+        "- The FIRST scene MUST include the first segment\n"
+        "- The LAST scene MUST include the last segment\n"
+    )
+    return rules
+
+def get_format_subject_rules(format_config, has_subject):
+    """Build subject/character rules from a channel's format config dict."""
     if not has_subject:
         return ""
-    
-    if video_format == 'flash':
+
+    if isinstance(format_config, str):
+        format_config = BASE_FORMATS.get(format_config, BASE_FORMATS['pulse'])
+
+    subject_mode = format_config.get('subject_mode', 'auto')
+    subject_interval = format_config.get('subject_interval', 300)
+
+    if subject_mode == 'all':
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
             "A character reference image has been uploaded.\n"
@@ -301,17 +554,18 @@ def get_format_subject_rules(video_format, has_subject):
             "  BAD: 'the main character appears' (too vague)\n"
             "- The character should feel ALIVE — never stiff or static\n"
         )
-    elif video_format == 'deep':
+    elif subject_mode == 'sparse':
+        interval_min = max(1, subject_interval // 60)
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
             "A character reference image has been uploaded.\n"
-            "- Use the character SPARINGLY — roughly once every 5 minutes\n"
-            "- Set has_subject: true only for scenes near 5-minute intervals (e.g. ~5min, ~10min, ~15min etc.)\n"
+            f"- Use the character SPARINGLY — roughly once every {interval_min} minutes\n"
+            f"- Set has_subject: true only for scenes near {interval_min}-minute intervals\n"
             "- When used, the character can be an educator pointing at something, reacting, or presenting\n"
             "- All other scenes: has_subject: false\n"
             "- When has_subject is true, describe emotion, body language, and action richly\n"
         )
-    else:  # pulse — let GPT decide
+    else:  # 'auto' — let GPT decide
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
             "A character reference image has been uploaded. You MUST follow these rules:\n"
@@ -329,7 +583,7 @@ def get_format_subject_rules(video_format, has_subject):
             "- When in doubt, set has_subject: true\n"
         )
 
-def detect_scene_changes(transcript_data, session_id, has_subject=False, video_format='pulse', audio_duration=0):
+def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions=''):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     # Use Gemini via OpenAI-compatible endpoint (cheaper + higher rate limits)
     if GEMINI_API_KEY:
@@ -348,8 +602,10 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
     CHUNK_SIZE = 50
     all_scenes = []
 
-    format_rules = get_format_scene_rules(video_format, audio_duration)
-    subject_note = get_format_subject_rules(video_format, has_subject)
+    if format_config is None:
+        format_config = BASE_FORMATS['pulse']
+    format_rules = get_format_scene_rules(format_config, audio_duration)
+    subject_note = get_format_subject_rules(format_config, has_subject)
 
     # Number segments globally so Gemini can reference them
     for idx, seg in enumerate(segments):
@@ -417,6 +673,8 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
             '"has_subject": true, "is_video": false}]}\n\n'
             f"{format_rules}"
         )
+        if scene_instructions:
+            system_prompt += f"\n\nCHANNEL-SPECIFIC SCENE INSTRUCTIONS:\n{scene_instructions}\n"
 
         user_msg = (
             f"Total audio duration: {audio_duration:.1f} seconds\n"
@@ -434,7 +692,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            temperature=0.4, max_tokens=32000
+            temperature=format_config.get('scene_detection_temperature', 0.4), max_tokens=32000
         )
         response_text = response.choices[0].message.content.strip()
         if response_text.startswith('```'):
@@ -587,15 +845,14 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, video_f
         split_scenes = []
         for scene in all_scenes:
             dur = scene['end_time'] - scene['start_time']
-            # Predict if this scene will be animated based on format rules
-            if video_format == 'flash':
-                will_be_animated = scene['start_time'] < 120.0
-            elif video_format == 'pulse':
-                will_be_animated = scene['start_time'] < 30.0
-            else:
-                will_be_animated = False
-            max_dur = 8.0 if will_be_animated else 15.0
-            target_dur = 6.0 if will_be_animated else 10.0
+            # Predict if this scene will be animated based on format config
+            _intro_dur = format_config.get('intro_duration', 30)
+            _intro_anim = format_config.get('intro_animated', False)
+            will_be_animated = _intro_anim and scene['start_time'] < _intro_dur
+            _intro_max = format_config.get('intro_scene_max_duration', 8)
+            _max_scene = format_config.get('max_scene_duration', 15)
+            max_dur = _intro_max if will_be_animated else _max_scene
+            target_dur = max(4.0, _intro_max - 2) if will_be_animated else max(6.0, _max_scene - 5)
             if dur > max_dur:
                 num_parts = math.ceil(dur / target_dur)
                 part_dur = dur / num_parts
@@ -1381,24 +1638,35 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse', project_title=''):
+def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
     try:
         start_time_ts = time.time()
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
         os.makedirs(work_dir, exist_ok=True)
 
-        preset_config = None
+        # Load channel config (backward compat: also works with old preset IDs)
+        channel_config = None
+        format_config = None
         has_subject = False
-        if preset_id:
-            preset_config = get_preset(preset_id)
-            if preset_config:
-                has_subject = preset_config.get('has_subject', False)
+        if channel_id:
+            channel_config = get_channel(channel_id) if channel_id.startswith('ch_') else get_preset(channel_id)
+            if channel_config:
+                has_subject = channel_config.get('has_subject', False)
+                format_config = channel_config.get('format')
+        if not format_config:
+            format_config = BASE_FORMATS['pulse']
+        # For backward compat, keep preset_config alias for upload_preset_images_to_whisk
+        preset_config = channel_config
 
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
         transcript_data = transcribe_audio(filepath, session_id)
-        scenes = detect_scene_changes(transcript_data, session_id, has_subject, video_format, audio_duration)
+        scenes = detect_scene_changes(
+            transcript_data, session_id, has_subject,
+            format_config=format_config, audio_duration=audio_duration,
+            scene_instructions=channel_config.get('scene_instructions', '') if channel_config else ''
+        )
 
         with open(os.path.join(work_dir, 'scenes.json'), 'w') as f:
             json.dump({'transcript': transcript_data, 'scenes': scenes, 'audio_duration': audio_duration}, f, indent=2)
@@ -1539,8 +1807,9 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             scene['scene_number'] = i + 1
         total = len(scenes)
 
-        # Animation flags per format — enforce from pipeline side
-        logger.info(f"Animation selection for format={video_format}, {len(scenes)} scenes:")
+        # Animation flags — driven by format_config
+        format_label = format_config.get('base', 'pulse')
+        logger.info(f"Animation selection for format={format_label}, {len(scenes)} scenes:")
         logger.info(f"  First scene: {scenes[0]['start_time']:.1f}-{scenes[0]['end_time']:.1f}s ({scenes[0]['end_time']-scenes[0]['start_time']:.1f}s)")
         if len(scenes) > 1:
             logger.info(f"  Last scene: {scenes[-1]['start_time']:.1f}-{scenes[-1]['end_time']:.1f}s ({scenes[-1]['end_time']-scenes[-1]['start_time']:.1f}s)")
@@ -1551,43 +1820,53 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 logger.error(f"  CRITICAL: Scene {i} is {dur:.1f}s — timestamps are still wrong!")
         for i, scene in enumerate(scenes[:20]):  # Log first 20 scenes' timing
             logger.info(f"  Scene {i}: start={scene['start_time']:.1f}s, end={scene['end_time']:.1f}s, dur={scene['end_time']-scene['start_time']:.1f}s")
-        if video_format == 'pulse':
-            # Intro: all scenes before ~30s animated, find natural break
-            intro_end = 30.0
-            last_intro_idx = -1
-            for i, scene in enumerate(scenes):
-                if scene['start_time'] < intro_end:
-                    last_intro_idx = i
-            for i, scene in enumerate(scenes):
-                if i <= last_intro_idx:
-                    scene['is_video'] = True
-                else:
-                    # Periodic animation every ~10 minutes
-                    mid = (scene['start_time'] + scene['end_time']) / 2
-                    near_10min = any(abs(mid - mark) < 30 for mark in range(600, int(audio_duration), 600))
-                    scene['is_video'] = near_10min and scene.get('is_video', False)
-        elif video_format == 'flash':
-            # Flash: animate ALL scenes in the first ~2 minutes
-            # Simple rule: any scene that STARTS before 120s gets animated
-            intro_cutoff = 120.0
-            animated_count = 0
-            for i, scene in enumerate(scenes):
-                if scene['start_time'] < intro_cutoff:
+
+        intro_end = format_config.get('intro_duration', 30)
+        intro_animated = format_config.get('intro_animated', False)
+        body_animated = format_config.get('body_animated', False)
+        periodic_interval = format_config.get('periodic_animation_interval', 0)
+        periodic_window = format_config.get('periodic_animation_window', 30)
+        subject_mode = format_config.get('subject_mode', 'auto')
+
+        # Find last intro scene index
+        last_intro_idx = -1
+        for i, scene in enumerate(scenes):
+            if scene['start_time'] < intro_end:
+                last_intro_idx = i
+
+        animated_count = 0
+        for i, scene in enumerate(scenes):
+            if i <= last_intro_idx:
+                # Intro zone — animate if intro_animated is True
+                scene['is_video'] = intro_animated
+                if intro_animated:
+                    animated_count += 1
+            else:
+                # Body zone
+                if body_animated:
                     scene['is_video'] = True
                     animated_count += 1
+                elif periodic_interval > 0:
+                    mid = (scene['start_time'] + scene['end_time']) / 2
+                    marks = range(periodic_interval, int(audio_duration), periodic_interval)
+                    near_mark = any(abs(mid - m) < periodic_window for m in marks)
+                    scene['is_video'] = near_mark and scene.get('is_video', False)
+                    if scene['is_video']:
+                        animated_count += 1
                 else:
                     scene['is_video'] = False
-            logger.info(f"Flash intro: {animated_count} scenes marked for animation (all starting before {intro_cutoff}s)")
-            if animated_count > 0:
-                logger.info(f"Flash intro: first animated scene ends at {scenes[0]['end_time']:.1f}s, last animated scene ends at {scenes[animated_count-1]['end_time']:.1f}s")
-            # Force subject on every scene for flash
-            if has_subject:
-                for scene in scenes:
-                    scene['has_subject'] = True
-        elif video_format == 'deep':
-            # No animation at all
+
+        logger.info(f"Animation: {animated_count} scenes marked for animation (intro_end={intro_end}s, intro_animated={intro_animated})")
+        if animated_count > 0:
+            first_anim = next((s for s in scenes if s.get('is_video')), None)
+            last_anim = next((s for s in reversed(scenes) if s.get('is_video')), None)
+            if first_anim and last_anim:
+                logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
+
+        # Force subject on every scene if subject_mode is 'all'
+        if has_subject and subject_mode == 'all':
             for scene in scenes:
-                scene['is_video'] = False
+                scene['has_subject'] = True
 
         # Upload preset images
         whisk_session = None
@@ -1600,14 +1879,11 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
 
         # Generate visuals
         scene_videos = []
-        # Determine Ken Burns effect per format
-        def get_scene_effect(fmt, scene_is_video):
+        # Determine Ken Burns effect from format config
+        def get_scene_effect(fmt_config, scene_is_video):
             if scene_is_video:
                 return 'none'  # Animated scenes don't need Ken Burns
-            if fmt == 'pulse':
-                return 'rotate_pulse'
-            else:  # flash and deep — no effects
-                return 'none'
+            return fmt_config.get('ken_burns_effect', 'none')
         
         for i, scene in enumerate(scenes):
             scene_num = scene['scene_number']
@@ -1615,7 +1891,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             duration = end - start
             is_video = scene.get('is_video', False)
             scene_has_subject = scene.get('has_subject', False) and has_subject
-            scene_effect = get_scene_effect(video_format, is_video)
+            scene_effect = get_scene_effect(format_config, is_video)
 
             logger.info(f"Scene {scene_num}/{total}: {start:.1f}-{end:.1f}s, video={is_video}, subject={scene_has_subject}, effect={scene_effect}")
 
@@ -1624,12 +1900,18 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
         image_results = [None] * len(scenes)
         images_generated = 0
 
+        # Channel-specific image instructions (prepended to every scene prompt)
+        image_instructions = channel_config.get('image_instructions', '') if channel_config else ''
+
         def generate_single_image(idx):
             scene = scenes[idx]
             scene_num = scene['scene_number']
             scene_has_subject = scene.get('has_subject', False) and has_subject
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-            result = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+            prompt = scene['visual_description']
+            if image_instructions:
+                prompt = f"{image_instructions}. {prompt}"
+            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
 
@@ -1668,16 +1950,17 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
         failed_indices = [i for i, r in enumerate(image_results) if r is None]
         if failed_indices:
             logger.info(f"=== PHASE 1B: Retrying {len(failed_indices)} failed scenes (1 at a time) ===")
-            emit_progress(session_id, 'generation', 56, f'Retrying {len(failed_indices)} failed images...')
+            emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...')
             time.sleep(5)  # Wait before retrying
-            
+
             retried = 0
-            for idx in failed_indices:
+            for retry_num, idx in enumerate(failed_indices, 1):
+                emit_progress(session_id, 'generation', 56, f'Retrying {retry_num}/{len(failed_indices)} images...')
                 scene = scenes[idx]
                 scene_num = scene['scene_number']
                 scene_has_subject = scene.get('has_subject', False) and has_subject
                 img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-                
+
                 logger.info(f"Retrying scene {scene_num} with rephrased prompt...")
                 rephrased = rephrase_prompt(scene['visual_description'])
                 result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
@@ -1790,7 +2073,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             start, end = scene['start_time'], scene['end_time']
             duration = end - start
             is_video = scene.get('is_video', False)
-            scene_effect = get_scene_effect(video_format, is_video)
+            scene_effect = get_scene_effect(format_config, is_video)
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
 
             if i in anim_results:
@@ -1827,7 +2110,7 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
                 else:
                     logger.error(f"=== ANIMATION DIAGNOSTIC DUMP for scene {scene_num} ===")
                     logger.error(f"  Scene: {scene_num}/{total}, start={start:.1f}s, end={end:.1f}s, duration={duration:.1f}s")
-                    logger.error(f"  is_video={is_video}, format={video_format}")
+                    logger.error(f"  is_video={is_video}, format={format_label}")
                     logger.error(f"  image_info type={type(image_results[i]).__name__}, media_id={image_results[i].get('media_id', 'none') if isinstance(image_results[i], dict) else 'N/A'}")
                     logger.error(f"  All animation attempts FAILED — falling back to still image")
                     logger.error(f"=== END DIAGNOSTIC ===")
@@ -1901,10 +2184,13 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             'audio_path': filepath,
             'audio_duration': audio_duration,
             'output_filename': output_filename,
-            'preset_id': preset_id,
-            'video_format': video_format,
+            'channel_id': channel_id,
+            'format_config': format_config,
             'has_subject': has_subject,
-            'project_title': project_title
+            'project_title': project_title,
+            # Backward compat fields for older regeneration code
+            'preset_id': channel_id,
+            'video_format': format_config.get('base', 'pulse')
         }
         with open(os.path.join(work_dir, 'generation_state.json'), 'w') as f:
             json.dump(generation_state, f, indent=2)
@@ -1926,13 +2212,17 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             'filename': os.path.basename(filepath),
             'audio_duration': round(audio_duration, 1),
             'scene_count': total,
-            'preset_id': preset_id or 'none',
-            'preset_name': preset_config.get('name', 'Unknown') if preset_config else 'None',
-            'animate_intro': video_format,
+            'channel_id': channel_id or 'none',
+            'channel_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
+            'format_label': format_config.get('label', format_config.get('base', 'pulse')),
             'credits_used': session_credits,
             'processing_time': processing_time,
             'status': 'complete',
-            'video_url': f'/download/{session_id}/{output_filename}'
+            'video_url': f'/download/{session_id}/{output_filename}',
+            # Backward compat
+            'preset_id': channel_id or 'none',
+            'preset_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
+            'animate_intro': format_config.get('base', 'pulse')
         })
         
         return output_path
@@ -1945,9 +2235,12 @@ def process_voiceover(filepath, session_id, preset_id=None, video_format='pulse'
             'session_id': session_id,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'filename': os.path.basename(filepath),
-            'preset_id': preset_id or 'none',
+            'channel_id': channel_id or 'none',
+            'channel_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
             'status': 'error',
-            'error': str(e)
+            'error': str(e),
+            # Backward compat
+            'preset_id': channel_id or 'none'
         })
         raise
 
@@ -2099,14 +2392,13 @@ def upload_audio():
     file = request.files['audio']
     if not file.filename or not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file'}), 400
-    preset_id = request.form.get('preset_id', '')
-    video_format = request.form.get('format', 'pulse')
+    channel_id = request.form.get('channel_id', '') or request.form.get('preset_id', '')
     project_title = request.form.get('project_title', '').strip()
     session_id = str(uuid.uuid4())[:12]
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, preset_id, video_format, project_title)
+    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/download/<session_id>/<filename>')
@@ -2147,10 +2439,14 @@ def regenerate_scene():
     audio_path = state['audio_path']
     audio_duration = state['audio_duration']
     output_filename = state['output_filename']
-    preset_id = state.get('preset_id')
-    video_format = state.get('video_format', 'flash')
+    # Backward compat: support both channel_id and preset_id
+    channel_id = state.get('channel_id') or state.get('preset_id')
+    format_config = state.get('format_config')
+    if not format_config:
+        video_format = state.get('video_format', 'pulse')
+        format_config = BASE_FORMATS.get(video_format, BASE_FORMATS['pulse'])
     has_subject = state.get('has_subject', False)
-    
+
     # Find the scene
     scene_idx = None
     scene = None
@@ -2159,39 +2455,39 @@ def regenerate_scene():
             scene_idx = i
             scene = s
             break
-    
+
     if scene is None:
         return jsonify({'error': f'Scene {scene_num} not found'}), 404
-    
+
     # Use custom prompt if provided, otherwise use existing
     prompt = custom_prompt if custom_prompt else scene['visual_description']
-    
+
     # Setup Whisk session
-    preset_config = get_preset(preset_id) if preset_id else None
+    channel_config = get_channel(channel_id) if channel_id else (get_preset(channel_id) if channel_id else None)
     whisk_session = None
-    if preset_config:
-        whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
+    if channel_config:
+        whisk_session = upload_preset_images_to_whisk(channel_config, session_id)
         if whisk_session == "TOKEN_EXPIRED":
             return jsonify({'error': 'Whisk token expired — update in Railway settings'}), 401
-    
+
     scene_has_subject = scene.get('has_subject', False) and has_subject
     img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-    
+
     # Regenerate image
     logger.info(f"Regenerating scene {scene_num} for session {session_id}")
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
-    
+
     if result == "TOKEN_EXPIRED":
         return jsonify({'error': 'Whisk token expired'}), 401
     if not result:
         return jsonify({'error': 'Image generation failed'}), 500
-    
+
     # Rebuild clip for this scene
     is_video = scene.get('is_video', False)
     duration = scene['end_time'] - scene['start_time']
     scene_effect = 'none'
-    if not is_video and video_format == 'pulse':
-        scene_effect = 'rotate_pulse'
+    if not is_video:
+        scene_effect = format_config.get('ken_burns_effect', 'none')
     
     vid_path = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
     
@@ -2263,20 +2559,24 @@ def regenerate_batch():
     audio_path = state['audio_path']
     audio_duration = state['audio_duration']
     output_filename = state['output_filename']
-    preset_id = state.get('preset_id')
-    video_format = state.get('video_format', 'flash')
+    # Backward compat: support both channel_id and preset_id
+    channel_id = state.get('channel_id') or state.get('preset_id')
+    format_config = state.get('format_config')
+    if not format_config:
+        video_format = state.get('video_format', 'pulse')
+        format_config = BASE_FORMATS.get(video_format, BASE_FORMATS['pulse'])
     has_subject = state.get('has_subject', False)
-    
+
     # Setup Whisk session once for the whole batch
-    preset_config = get_preset(preset_id) if preset_id else None
+    channel_config = get_channel(channel_id) if channel_id else (get_preset(channel_id) if channel_id else None)
     whisk_session = None
-    if preset_config:
-        whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
+    if channel_config:
+        whisk_session = upload_preset_images_to_whisk(channel_config, session_id)
         if whisk_session == "TOKEN_EXPIRED":
             return jsonify({'error': 'Whisk token expired'}), 401
-    
+
     results = []
-    
+
     # Phase 1: Regenerate all images
     for scene_num in scene_numbers:
         scene_idx = None
@@ -2286,30 +2586,30 @@ def regenerate_batch():
                 scene_idx = i
                 scene = s
                 break
-        
+
         if scene is None:
             results.append({'scene_number': scene_num, 'success': False, 'error': 'Not found'})
             continue
-        
+
         prompt = scene['visual_description']
         scene_has_subject = scene.get('has_subject', False) and has_subject
         img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-        
+
         logger.info(f"Batch regen: generating image for scene {scene_num}")
         result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
-        
+
         if result == "TOKEN_EXPIRED":
             return jsonify({'error': 'Whisk token expired', 'completed': results}), 401
         if not result:
             results.append({'scene_number': scene_num, 'success': False, 'error': 'Image gen failed'})
             continue
-        
+
         # Rebuild clip
         is_video = scene.get('is_video', False)
         duration = scene['end_time'] - scene['start_time']
         scene_effect = 'none'
-        if not is_video and video_format == 'pulse':
-            scene_effect = 'rotate_pulse'
+        if not is_video:
+            scene_effect = format_config.get('ken_burns_effect', 'none')
         
         vid_path = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
         
@@ -2351,14 +2651,18 @@ def regenerate_batch():
         'scenes': scenes
     })
 
-@app.route('/api/presets', methods=['GET'])
-def list_presets():
-    return jsonify(get_all_presets())
+# ===================== CHANNEL API ROUTES =====================
+@app.route('/api/channels', methods=['GET'])
+def list_channels():
+    return jsonify(get_all_channels())
 
-@app.route('/api/presets', methods=['POST'])
-def create_preset():
+@app.route('/api/channels', methods=['POST'])
+def create_channel_route():
     name = request.form.get('name', 'Untitled')
+    base_format = request.form.get('base_format', 'pulse')
     style_text = request.form.get('style_text', '').strip()
+    scene_instructions = request.form.get('scene_instructions', '').strip()
+    image_instructions = request.form.get('image_instructions', '').strip()
     tags = request.form.get('tags', '').strip()
     tag_colors_raw = request.form.get('tag_colors', '{}')
     try:
@@ -2367,157 +2671,221 @@ def create_preset():
         tag_colors = {}
     style_b64 = None
     if 'style' in request.files:
-        style_file = request.files['style']
-        if style_file.filename and allowed_image(style_file.filename):
-            style_b64 = base64.b64encode(style_file.read()).decode('utf-8')
-    if not style_b64 and not style_text:
-        return jsonify({'error': 'Provide a style image, text description, or both.'}), 400
+        sf = request.files['style']
+        if sf.filename and allowed_image(sf.filename):
+            style_b64 = base64.b64encode(sf.read()).decode('utf-8')
     subject_b64 = None
     if 'subject' in request.files:
         sf = request.files['subject']
         if sf.filename and allowed_image(sf.filename):
             subject_b64 = base64.b64encode(sf.read()).decode('utf-8')
-    preset_id = save_preset(name, style_b64, subject_b64, style_text, tags, tag_colors)
-    return jsonify({'id': preset_id, 'message': 'Preset saved'})
+    logo_b64 = None
+    if 'logo' in request.files:
+        lf = request.files['logo']
+        if lf.filename and allowed_image(lf.filename):
+            logo_b64 = base64.b64encode(lf.read()).decode('utf-8')
+    channel_id = save_channel(name, base_format=base_format, style_data=style_b64,
+                              subject_data=subject_b64, logo_data=logo_b64,
+                              style_text=style_text, tags=tags, tag_colors=tag_colors,
+                              scene_instructions=scene_instructions, image_instructions=image_instructions)
+    return jsonify({'id': channel_id, 'message': 'Channel created'})
 
-@app.route('/api/presets/<preset_id>', methods=['DELETE'])
-def remove_preset(preset_id):
-    return jsonify({'message': 'Deleted'}) if delete_preset(preset_id) else (jsonify({'error': 'Not found'}), 404)
-
-@app.route('/api/presets/<preset_id>', methods=['PUT'])
-def update_preset(preset_id):
-    """Update an existing preset's name, tags, style text, and images."""
-    preset_dir = os.path.join(app.config['PRESET_FOLDER'], preset_id)
-    config_path = os.path.join(preset_dir, 'config.json')
-    if not os.path.exists(config_path):
-        return jsonify({'error': 'Preset not found'}), 404
-    with open(config_path) as f:
-        config = json.load(f)
-    # Update fields if provided
-    name = request.form.get('name')
-    if name is not None:
-        config['name'] = name
-    style_text = request.form.get('style_text')
-    if style_text is not None:
-        config['style_text'] = style_text
-    tags = request.form.get('tags')
-    if tags is not None:
-        config['tags'] = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
-    tag_colors = request.form.get('tag_colors')
-    if tag_colors:
-        try:
-            config['tag_colors'] = json.loads(tag_colors)
-        except:
-            pass
-    # Update images if new ones uploaded
-    if 'style' in request.files:
-        sf = request.files['style']
-        if sf.filename and allowed_image(sf.filename):
-            with open(os.path.join(preset_dir, 'style.png'), 'wb') as f:
-                f.write(sf.read())
-            config['has_style_image'] = True
-    if 'subject' in request.files:
-        sf = request.files['subject']
-        if sf.filename and allowed_image(sf.filename):
-            with open(os.path.join(preset_dir, 'subject.png'), 'wb') as f:
-                f.write(sf.read())
-            config['has_subject'] = True
-    # Allow removing subject
-    if request.form.get('remove_subject') == 'true':
-        subject_path = os.path.join(preset_dir, 'subject.png')
-        if os.path.exists(subject_path):
-            os.remove(subject_path)
-        config['has_subject'] = False
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-    return jsonify({'ok': True, 'id': preset_id})
-
-@app.route('/api/presets/reorder', methods=['POST'])
-def reorder_presets():
-    order = request.json.get('order', [])
-    if not isinstance(order, list):
-        return jsonify({'error': 'Invalid order'}), 400
-    save_preset_order(order)
-    return jsonify({'ok': True})
-
-@app.route('/api/presets/<preset_id>', methods=['GET'])
-def get_single_preset(preset_id):
-    """Get a single preset's config data."""
-    config_path = os.path.join(app.config['PRESET_FOLDER'], preset_id, 'config.json')
+@app.route('/api/channels/<channel_id>', methods=['GET'])
+def get_single_channel(channel_id):
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(channel_dir, 'config.json')
     if not os.path.exists(config_path):
         return jsonify({'error': 'Not found'}), 404
     with open(config_path) as f:
         config = json.load(f)
-    config['id'] = preset_id
+    config['id'] = channel_id
+    config['has_logo'] = os.path.exists(os.path.join(channel_dir, 'logo.png'))
     return jsonify(config)
 
-@app.route('/api/presets/<preset_id>/style.png')
-def preset_style_image(preset_id):
-    path = os.path.join(app.config['PRESET_FOLDER'], preset_id, 'style.png')
+@app.route('/api/channels/<channel_id>', methods=['PUT'])
+def update_channel_route(channel_id):
+    fields = {}
+    name = request.form.get('name')
+    if name is not None:
+        fields['name'] = name
+    style_text = request.form.get('style_text')
+    if style_text is not None:
+        fields['style_text'] = style_text
+    scene_instructions = request.form.get('scene_instructions')
+    if scene_instructions is not None:
+        fields['scene_instructions'] = scene_instructions
+    image_instructions = request.form.get('image_instructions')
+    if image_instructions is not None:
+        fields['image_instructions'] = image_instructions
+    tags = request.form.get('tags')
+    if tags is not None:
+        fields['tags'] = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
+    tag_colors = request.form.get('tag_colors')
+    if tag_colors:
+        try:
+            fields['tag_colors'] = json.loads(tag_colors)
+        except:
+            pass
+    if 'style' in request.files:
+        sf = request.files['style']
+        if sf.filename and allowed_image(sf.filename):
+            fields['style_data'] = base64.b64encode(sf.read()).decode('utf-8')
+    if 'subject' in request.files:
+        sf = request.files['subject']
+        if sf.filename and allowed_image(sf.filename):
+            fields['subject_data'] = base64.b64encode(sf.read()).decode('utf-8')
+    if 'logo' in request.files:
+        lf = request.files['logo']
+        if lf.filename and allowed_image(lf.filename):
+            fields['logo_data'] = base64.b64encode(lf.read()).decode('utf-8')
+    if request.form.get('remove_subject') == 'true':
+        fields['remove_subject'] = True
+    if request.form.get('remove_logo') == 'true':
+        fields['remove_logo'] = True
+    if update_channel(channel_id, **fields):
+        return jsonify({'ok': True, 'id': channel_id})
+    return jsonify({'error': 'Channel not found'}), 404
+
+@app.route('/api/channels/<channel_id>', methods=['DELETE'])
+def delete_channel_route(channel_id):
+    return jsonify({'message': 'Deleted'}) if delete_channel(channel_id) else (jsonify({'error': 'Not found'}), 404)
+
+@app.route('/api/channels/<channel_id>/logo.png')
+def channel_logo_image(channel_id):
+    path = os.path.join(app.config['CHANNEL_FOLDER'], channel_id, 'logo.png')
     return send_file(path, mimetype='image/png') if os.path.exists(path) else ('', 404)
 
-@app.route('/api/presets/<preset_id>/subject.png')
-def preset_subject_image(preset_id):
-    path = os.path.join(app.config['PRESET_FOLDER'], preset_id, 'subject.png')
+@app.route('/api/channels/<channel_id>/style.png')
+def channel_style_image(channel_id):
+    path = os.path.join(app.config['CHANNEL_FOLDER'], channel_id, 'style.png')
     return send_file(path, mimetype='image/png') if os.path.exists(path) else ('', 404)
 
-@app.route('/api/presets/export')
-def export_presets():
-    """Export all presets as a JSON file with embedded base64 images."""
-    presets = get_all_presets()
+@app.route('/api/channels/<channel_id>/subject.png')
+def channel_subject_image(channel_id):
+    path = os.path.join(app.config['CHANNEL_FOLDER'], channel_id, 'subject.png')
+    return send_file(path, mimetype='image/png') if os.path.exists(path) else ('', 404)
+
+@app.route('/api/channels/reorder', methods=['POST'])
+def reorder_channels():
+    order = request.json.get('order', [])
+    if not isinstance(order, list):
+        return jsonify({'error': 'Invalid order'}), 400
+    save_channel_registry(order)
+    return jsonify({'ok': True})
+
+@app.route('/api/channels/export')
+def export_channels():
+    channels = get_all_channels()
     export_data = []
-    for p in presets:
-        preset_dir = os.path.join(app.config['PRESET_FOLDER'], p['id'])
-        entry = {'name': p['name'], 'has_subject': p.get('has_subject', False),
-                 'style_text': p.get('style_text', ''), 'tags': p.get('tags', []),
-                 'tag_colors': p.get('tag_colors', {})}
-        # Embed style image
-        style_path = os.path.join(preset_dir, 'style.png')
-        if os.path.exists(style_path):
-            with open(style_path, 'rb') as f:
-                entry['style_b64'] = base64.b64encode(f.read()).decode('utf-8')
-        # Embed subject image
-        subject_path = os.path.join(preset_dir, 'subject.png')
-        if os.path.exists(subject_path):
-            with open(subject_path, 'rb') as f:
-                entry['subject_b64'] = base64.b64encode(f.read()).decode('utf-8')
+    for ch in channels:
+        channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], ch['id'])
+        entry = {
+            'name': ch.get('name'), 'tags': ch.get('tags', []),
+            'tag_colors': ch.get('tag_colors', {}), 'style_text': ch.get('style_text', ''),
+            'scene_instructions': ch.get('scene_instructions', ''),
+            'image_instructions': ch.get('image_instructions', ''),
+            'format': ch.get('format', {}),
+            'has_subject': ch.get('has_subject', False),
+        }
+        for img_name, key in [('style.png', 'style_b64'), ('subject.png', 'subject_b64'), ('logo.png', 'logo_b64')]:
+            img_path = os.path.join(channel_dir, img_name)
+            if os.path.exists(img_path):
+                with open(img_path, 'rb') as f:
+                    entry[key] = base64.b64encode(f.read()).decode('utf-8')
         export_data.append(entry)
     response = app.response_class(
-        response=json.dumps(export_data, indent=2),
-        mimetype='application/json',
-        headers={'Content-Disposition': 'attachment; filename=presets-export.json'}
-    )
+        response=json.dumps(export_data, indent=2), mimetype='application/json',
+        headers={'Content-Disposition': 'attachment; filename=channels-export.json'})
     return response
 
-@app.route('/api/presets/import', methods=['POST'])
-def import_presets():
-    """Import presets from a JSON export file."""
+@app.route('/api/channels/import', methods=['POST'])
+def import_channels():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     file = request.files['file']
     try:
         data = json.loads(file.read().decode('utf-8'))
     except Exception as e:
-        return jsonify({'error': f'Invalid JSON file: {str(e)}'}), 400
+        return jsonify({'error': f'Invalid JSON: {str(e)}'}), 400
     if not isinstance(data, list):
-        return jsonify({'error': 'Invalid format — expected a list of presets'}), 400
+        return jsonify({'error': 'Expected a list of channels'}), 400
     count = 0
     for entry in data:
         name = entry.get('name', 'Imported')
+        fmt = entry.get('format', {})
+        base_format = fmt.get('base', 'pulse') if fmt else 'pulse'
         style_b64 = entry.get('style_b64')
         subject_b64 = entry.get('subject_b64')
+        logo_b64 = entry.get('logo_b64')
         style_text = entry.get('style_text', '')
-        tags = ','.join(entry.get('tags', []))
+        tags = entry.get('tags', [])
         tag_colors = entry.get('tag_colors', {})
-        if not style_b64 and not style_text:
-            continue
-        save_preset(name, style_b64, subject_b64 if subject_b64 else None, style_text, tags, tag_colors)
+        scene_instructions = entry.get('scene_instructions', '')
+        image_instructions = entry.get('image_instructions', '')
+        cid = save_channel(name, base_format=base_format, style_data=style_b64,
+                           subject_data=subject_b64, logo_data=logo_b64,
+                           style_text=style_text, tags=tags if isinstance(tags, list) else '',
+                           tag_colors=tag_colors, scene_instructions=scene_instructions,
+                           image_instructions=image_instructions)
+        # Apply full format config if provided (overrides base defaults)
+        if fmt and cid:
+            ch_dir = os.path.join(app.config['CHANNEL_FOLDER'], cid, 'config.json')
+            with open(ch_dir) as f:
+                cfg = json.load(f)
+            cfg['format'] = fmt
+            with open(ch_dir, 'w') as f:
+                json.dump(cfg, f, indent=2)
         count += 1
     return jsonify({'ok': True, 'count': count})
 
+# ===================== SESSION STATE & RECENT GENERATIONS =====================
+@app.route('/api/recent-generations')
+def recent_generations():
+    """Public endpoint: last 10 generations for the home screen."""
+    history = load_history()
+    recent = history[:10]
+    safe_fields = ['session_id', 'timestamp', 'audio_duration', 'scene_count',
+                   'channel_name', 'preset_name', 'format_label', 'animate_intro',
+                   'status', 'video_url']
+    return jsonify([{k: h.get(k) for k in safe_fields if k in h} for h in recent])
+
+@app.route('/api/session/<session_id>/state')
+def get_session_state(session_id):
+    """Load generation state for reopening a previous generation."""
+    work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
+    state_path = os.path.join(work_dir, 'generation_state.json')
+    if not os.path.exists(state_path):
+        return jsonify({'error': 'Session not found'}), 404
+    with open(state_path) as f:
+        state = json.load(f)
+    return jsonify({
+        'session_id': session_id,
+        'scenes': state.get('scenes', []),
+        'audio_duration': state.get('audio_duration', 0),
+        'output_filename': state.get('output_filename', ''),
+        'channel_id': state.get('channel_id', state.get('preset_id', '')),
+        'channel_name': state.get('channel_name', ''),
+        'video_url': f'/download/{session_id}/{state.get("output_filename", "")}' if state.get('output_filename') else None,
+    })
+
+# ===================== BACKWARD COMPAT: Preset API aliases =====================
+@app.route('/api/presets', methods=['GET'])
+def list_presets_compat():
+    return list_channels()
+
+@app.route('/api/presets/<preset_id>/style.png')
+def preset_style_compat(preset_id):
+    channel_id = f'ch_{preset_id}' if not preset_id.startswith('ch_') else preset_id
+    return channel_style_image(channel_id)
+
+@app.route('/api/presets/<preset_id>/subject.png')
+def preset_subject_compat(preset_id):
+    channel_id = f'ch_{preset_id}' if not preset_id.startswith('ch_') else preset_id
+    return channel_subject_image(channel_id)
+
 @app.route('/version')
 def version():
-    return jsonify({"version": "v43", "features": ["presets", "subject", "long_form",
+    return jsonify({"version": "v52", "features": ["channels", "wizard", "subject", "long_form",
         "style_enforcement", "retry_logic", "resolution_1080p", "dark_mode", "audio_fix",
         "subject_detection", "scene_renumber", "style_text", "admin_dashboard"]})
 

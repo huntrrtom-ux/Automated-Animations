@@ -29,17 +29,7 @@
 
         .dl-link { color: var(--accent); text-decoration: none; font-weight: 600; }
         .dl-link:hover { color: var(--accent-light); text-decoration: underline; }
-
-        .empty-state { text-align: center; padding: 3rem; color: var(--text-muted); }
-
         .duration-fmt { font-family: var(--font-display); font-weight: 500; }
-
-        @media (max-width: 700px) {
-            .admin-body { padding: 1rem 0.75rem; }
-            .history-table { font-size: 0.75rem; }
-            .history-table th, .history-table td { padding: 0.5rem 0.4rem; }
-            .hide-mobile { display: none; }
-        }
 
         .credits-card { margin-bottom: 1.5rem; }
         .credits-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
@@ -52,211 +42,225 @@
         .credits-input { width: 140px; font-size: 0.85rem; padding: 0.45rem 0.7rem; }
         .credits-set-btn { font-size: 0.75rem; padding: 0.45rem 1rem; white-space: nowrap; }
 
-        /* Preset form */
-        .preset-form-card { margin-bottom: 1.5rem; }
-        .preset-form-desc { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 1rem; }
-        .preset-form-grid { display: flex; flex-direction: column; gap: 0.85rem; }
-        .pf-field { display: flex; flex-direction: column; }
-        .pf-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; color: var(--text-muted); }
-        .pf-optional { font-weight: 400; text-transform: none; }
-        .pf-tags-wrap { display: flex; gap: 5px; flex-wrap: wrap; min-height: 0; margin-bottom: 5px; }
-        .pf-tag-input-row { display: flex; gap: 6px; align-items: center; }
-        .pf-images-row { display: flex; gap: 1rem; }
-        .pf-file-input { font-size: 0.8rem; }
-        .preset-gallery-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-        .preset-io-row { display: flex; gap: 6px; }
+        /* Channel grid (admin) */
+        .admin-channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+        .admin-ch-tile { position: relative; background: var(--bg-card); border: 2px solid var(--border); border-radius: var(--radius-lg); padding: 1rem; cursor: pointer; transition: all 0.2s; text-align: center; overflow: hidden; }
+        .admin-ch-tile:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.2); }
+        .admin-ch-logo-wrap { position: relative; width: 56px; height: 56px; margin: 0 auto 0.5rem; display: flex; align-items: center; justify-content: center; }
+        .admin-ch-logo { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border); }
+        .admin-ch-logo-ph { width: 56px; height: 56px; border-radius: 8px; background: var(--bg); border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; }
+        .admin-ch-name { font-family: var(--font-display); font-size: 0.88rem; font-weight: 600; margin-bottom: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .admin-ch-meta { font-size: 0.68rem; color: var(--text-muted); }
+        .admin-ch-tags { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; margin-top: 0.25rem; }
+        .admin-ch-tag { font-size: 0.56rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 3px; border: 1px solid; }
 
-        /* Admin gallery items */
-        .admin-gallery { display: flex; flex-direction: column; gap: 0.5rem; }
-        .admin-preset-card { display: flex; align-items: center; gap: 0.85rem; padding: 0.85rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); transition: border-color 0.15s; }
-        .admin-preset-card:hover { border-color: var(--accent); }
-        .admin-preset-thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border); flex-shrink: 0; }
-        .admin-preset-info { flex: 1; min-width: 0; }
-        .admin-preset-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 2px; }
-        .admin-preset-meta { font-size: 0.72rem; color: var(--text-muted); }
-        .admin-preset-tags { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px; }
-        .admin-tag { font-size: 0.6rem; padding: 2px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-        .admin-preset-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        /* Edit channel panel */
+        .edit-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; }
+        .edit-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+        .edit-panel-header h3 { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; margin: 0; }
+        .edit-panel-close { background: none; border: none; color: var(--text-muted); font-size: 1.3rem; cursor: pointer; padding: 0; }
+        .edit-panel-close:hover { color: var(--text); }
+        .edit-form-grid { display: flex; flex-direction: column; gap: 0.85rem; }
+        .ef-field { display: flex; flex-direction: column; }
+        .ef-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; color: var(--text-muted); }
+        .ef-optional { font-weight: 400; text-transform: none; }
+        .ef-readonly { font-size: 0.82rem; color: var(--text-secondary); padding: 0.5rem 0.75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+        .ef-images-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+        .ef-image-box { flex: 1; min-width: 120px; }
+        .ef-image-preview { width: 100%; max-height: 80px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 4px; background: var(--bg); }
+        .ef-file-input { font-size: 0.78rem; }
+        .ef-tags-wrap { display: flex; gap: 5px; flex-wrap: wrap; min-height: 0; margin-bottom: 5px; }
+        .ef-tag-input-row { display: flex; gap: 6px; align-items: center; }
+        .ef-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+
+        /* Channel import/export header */
+        .channels-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .channels-io-row { display: flex; gap: 6px; }
+
+        @media (max-width: 700px) {
+            .admin-body { padding: 1rem 0.75rem; }
+            .admin-channel-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+            .history-table { font-size: 0.75rem; }
+            .history-table th, .history-table td { padding: 0.5rem 0.4rem; }
+            .hide-mobile { display: none; }
+        }
     </style>
 </head>
 <body>
     <div class="admin-header">
-        <h1>HUNTER <span class="logo-accent">MOTIONS</span> — Admin</h1>
+        <h1>HUNTER <span class="logo-accent">MOTIONS</span> &mdash; Admin</h1>
         <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost admin-tab-btn" data-tab="channels" style="padding:0.4rem 1rem;font-size:0.8rem;">Channels</button>
             <button class="btn btn-ghost admin-tab-btn active" data-tab="stats" style="padding:0.4rem 1rem;font-size:0.8rem;">Stats</button>
-            <button class="btn btn-ghost admin-tab-btn" data-tab="presets" style="padding:0.4rem 1rem;font-size:0.8rem;">Presets</button>
-            <a href="/" class="btn btn-ghost" style="padding:0.4rem 1rem;font-size:0.8rem;">← App</a>
+            <a href="/" class="btn btn-ghost" style="padding:0.4rem 1rem;font-size:0.8rem;">&larr; App</a>
         </div>
     </div>
 
     <div class="admin-body">
+        <!-- Channels Tab -->
+        <div id="admin-tab-channels" class="admin-tab-content" style="display:none">
+            <div class="channels-header">
+                <h2 style="font-family:var(--font-display);font-size:1.2rem;font-weight:600;margin:0">Channels</h2>
+                <div class="channels-io-row">
+                    <button class="btn btn-ghost btn-sm" id="admin-export-btn">Export</button>
+                    <button class="btn btn-ghost btn-sm" id="admin-import-btn">Import</button>
+                    <input type="file" id="admin-import-file" accept=".json" hidden>
+                </div>
+            </div>
+
+            <!-- Edit panel (shown when a channel tile is clicked) -->
+            <div id="edit-panel" class="edit-panel" style="display:none">
+                <div class="edit-panel-header">
+                    <h3 id="edit-panel-title">Edit Channel</h3>
+                    <button class="edit-panel-close" id="edit-panel-close">&times;</button>
+                </div>
+                <div class="edit-form-grid">
+                    <input type="hidden" id="edit-ch-id">
+                    <div class="ef-field">
+                        <label class="ef-label">Channel Name</label>
+                        <div class="ef-readonly" id="edit-ch-name-display">—</div>
+                    </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Format</label>
+                        <div class="ef-readonly" id="edit-ch-format-display">—</div>
+                    </div>
+                    <div class="ef-images-row">
+                        <div class="ef-image-box">
+                            <label class="ef-label">Logo</label>
+                            <img id="edit-logo-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <input type="file" id="edit-logo-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
+                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-logo-remove"> Remove logo</label>
+                        </div>
+                        <div class="ef-image-box">
+                            <label class="ef-label">Style Image</label>
+                            <img id="edit-style-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <input type="file" id="edit-style-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
+                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-style-remove"> Remove style</label>
+                        </div>
+                        <div class="ef-image-box">
+                            <label class="ef-label">Subject Image</label>
+                            <img id="edit-subject-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <input type="file" id="edit-subject-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
+                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-subject-remove"> Remove subject</label>
+                        </div>
+                    </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Tags</label>
+                        <div class="ef-tags-wrap" id="edit-tag-pills"></div>
+                        <div class="ef-tag-input-row">
+                            <input type="text" id="edit-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
+                            <input type="color" id="edit-tag-color" value="#5B9BD5" class="tag-color-input" style="width:30px;height:30px;border:1px solid var(--border);border-radius:6px;padding:1px;cursor:pointer;background:var(--bg)">
+                        </div>
+                    </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Style Text</label>
+                        <textarea id="edit-style-text" class="text-input" rows="2" placeholder="e.g. Family Guy cartoon style..." style="resize:vertical"></textarea>
+                    </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Scene Instructions <span class="ef-optional">(injected into Gemini scene detection)</span></label>
+                        <textarea id="edit-scene-instructions" class="text-input" rows="2" placeholder="e.g. Always place the narrator behind a desk..." style="resize:vertical"></textarea>
+                    </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Image Instructions <span class="ef-optional">(prepended to every image prompt)</span></label>
+                        <textarea id="edit-image-instructions" class="text-input" rows="2" placeholder="e.g. Use warm golden-hour lighting..." style="resize:vertical"></textarea>
+                    </div>
+                    <div class="ef-actions">
+                        <button class="btn btn-ghost btn-sm" id="edit-ch-cancel">Cancel</button>
+                        <button class="btn btn-ghost btn-sm" id="edit-ch-delete" style="color:var(--error)">Delete</button>
+                        <button class="btn btn-primary btn-sm" id="edit-ch-save">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Channel grid -->
+            <div id="admin-channel-grid" class="admin-channel-grid">
+                <p class="empty-state">Loading channels...</p>
+            </div>
+        </div>
+
         <!-- Stats Tab -->
         <div id="admin-tab-stats" class="admin-tab-content">
-        <div class="stats-row" id="stats-row">
-            <div class="stat-card">
-                <div class="stat-value" id="stat-total">0</div>
-                <div class="stat-label">Total Generations</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-complete">0</div>
-                <div class="stat-label">Completed</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-errors">0</div>
-                <div class="stat-label">Errors</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-duration">0m</div>
-                <div class="stat-label">Total Audio Processed</div>
-            </div>
-        </div>
-
-        <!-- Credits Counter -->
-        <div class="card credits-card">
-            <div class="credits-header">
-                <div>
-                    <h3 class="credits-title">Credits Used</h3>
-                    <p class="credits-desc">1 credit per image · 2 credits per animation (Veo)</p>
+            <div class="stats-row" id="stats-row">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total">0</div>
+                    <div class="stat-label">Total Generations</div>
                 </div>
-                <button class="btn btn-ghost credits-reset-btn" id="reset-credits-btn">Reset to 0</button>
-            </div>
-            <div class="credits-counter">
-                <span class="credits-value" id="credits-used">0</span>
-            </div>
-            <div class="credits-set">
-                <input type="number" id="credits-set-input" class="text-input credits-input" placeholder="Enter amount">
-                <button class="btn btn-primary credits-set-btn" id="set-credits-btn">Set Credits</button>
-            </div>
-        </div>
-
-        <div class="card" style="overflow-x:auto;">
-            <table class="history-table">
-                <thead>
-                    <tr>
-                        <th>Timestamp</th>
-                        <th>Audio File</th>
-                        <th>Duration</th>
-                        <th>Scenes</th>
-                        <th>Preset</th>
-                        <th class="hide-mobile">Format</th>
-                        <th>Credits</th>
-                        <th>Processing Time</th>
-                        <th>Status</th>
-                        <th>Video</th>
-                    </tr>
-                </thead>
-                <tbody id="history-body">
-                </tbody>
-            </table>
-            <div class="empty-state hidden" id="empty-state">No generations yet.</div>
-        </div>
-        </div><!-- end stats tab -->
-
-        <!-- Presets Tab -->
-        <div id="admin-tab-presets" class="admin-tab-content" style="display:none">
-            <div class="card preset-form-card">
-                <h2 class="card-title">Create Preset</h2>
-                <p class="preset-form-desc">Define your visual style with an image, text description, or both.</p>
-                <div class="preset-form-grid">
-                    <div class="pf-field">
-                        <label class="pf-label">Preset Name</label>
-                        <input type="text" id="admin-preset-name" placeholder="e.g. Family Guy + Dave" class="text-input">
-                    </div>
-                    <div class="pf-field">
-                        <label class="pf-label">Tags</label>
-                        <div class="pf-tags-wrap" id="admin-tag-pills"></div>
-                        <div class="pf-tag-input-row">
-                            <input type="text" id="admin-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
-                            <input type="color" id="admin-tag-color" value="#5B9BD5" class="tag-color-input">
-                        </div>
-                    </div>
-                    <div class="pf-field">
-                        <label class="pf-label">Style Description</label>
-                        <textarea id="admin-style-text" class="text-input" rows="2" placeholder="e.g. Family Guy cartoon style, thick outlines..." style="resize:vertical"></textarea>
-                    </div>
-                    <div class="pf-images-row">
-                        <div class="pf-field" style="flex:1">
-                            <label class="pf-label">Style Image</label>
-                            <input type="file" id="admin-style-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
-                        </div>
-                        <div class="pf-field" style="flex:1">
-                            <label class="pf-label">Subject <span class="pf-optional">(optional)</span></label>
-                            <input type="file" id="admin-subject-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" id="admin-save-preset">Save Preset</button>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-complete">0</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-errors">0</div>
+                    <div class="stat-label">Errors</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-duration">0m</div>
+                    <div class="stat-label">Total Audio Processed</div>
                 </div>
             </div>
 
-            <div class="card">
-                <div class="preset-gallery-header">
-                    <h2 class="card-title" style="margin:0">Saved Presets</h2>
-                    <div class="preset-io-row">
-                        <button class="btn btn-ghost btn-sm" id="admin-export-btn">Export</button>
-                        <button class="btn btn-ghost btn-sm" id="admin-import-btn">Import</button>
-                        <input type="file" id="admin-import-file" accept=".json" hidden>
+            <!-- Credits -->
+            <div class="card credits-card">
+                <div class="credits-header">
+                    <div>
+                        <h3 class="credits-title">Credits Used</h3>
+                        <p class="credits-desc">1 credit per image &middot; 2 credits per animation (Veo)</p>
                     </div>
+                    <button class="btn btn-ghost credits-reset-btn" id="reset-credits-btn">Reset to 0</button>
                 </div>
-                <div id="admin-preset-gallery" class="admin-gallery"></div>
+                <div class="credits-counter">
+                    <span class="credits-value" id="credits-used">0</span>
+                </div>
+                <div class="credits-set">
+                    <input type="number" id="credits-set-input" class="text-input credits-input" placeholder="Enter amount">
+                    <button class="btn btn-primary credits-set-btn" id="set-credits-btn">Set Credits</button>
+                </div>
             </div>
 
-            <!-- Edit Preset Modal -->
-            <div id="edit-preset-overlay" class="modal-overlay hidden">
-                <div class="modal" style="max-width:520px">
-                    <div class="modal-header">
-                        <h3>Edit Preset</h3>
-                        <button class="modal-close" id="edit-preset-close">&times;</button>
-                    </div>
-                    <div class="modal-body" style="display:flex;flex-direction:column;gap:0.75rem">
-                        <input type="hidden" id="edit-preset-id">
-                        <div class="pf-field">
-                            <label class="pf-label">Preset Name</label>
-                            <input type="text" id="edit-preset-name" class="text-input">
-                        </div>
-                        <div class="pf-field">
-                            <label class="pf-label">Tags</label>
-                            <div class="pf-tags-wrap" id="edit-tag-pills"></div>
-                            <div class="pf-tag-input-row">
-                                <input type="text" id="edit-tag-input" placeholder="Type a tag, press Enter" class="text-input" style="flex:1">
-                                <input type="color" id="edit-tag-color" value="#5B9BD5" class="tag-color-input">
-                            </div>
-                        </div>
-                        <div class="pf-field">
-                            <label class="pf-label">Style Description</label>
-                            <textarea id="edit-style-text" class="text-input" rows="2" style="resize:vertical"></textarea>
-                        </div>
-                        <div class="pf-images-row">
-                            <div class="pf-field" style="flex:1">
-                                <label class="pf-label">Replace Style Image</label>
-                                <input type="file" id="edit-style-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
-                            </div>
-                            <div class="pf-field" style="flex:1">
-                                <label class="pf-label">Replace Subject</label>
-                                <input type="file" id="edit-subject-file" accept=".png,.jpg,.jpeg,.webp" class="pf-file-input">
-                            </div>
-                        </div>
-                    </div>
-                    <div style="display:flex;gap:8px;justify-content:flex-end;padding:1rem 1.5rem;border-top:1px solid var(--border)">
-                        <button class="btn btn-ghost" id="edit-preset-cancel">Cancel</button>
-                        <button class="btn btn-primary" id="edit-preset-save">Save Changes</button>
-                    </div>
-                </div>
+            <div class="card" style="overflow-x:auto;">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Audio File</th>
+                            <th>Duration</th>
+                            <th>Scenes</th>
+                            <th>Channel</th>
+                            <th class="hide-mobile">Format</th>
+                            <th>Credits</th>
+                            <th>Processing Time</th>
+                            <th>Status</th>
+                            <th>Video</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body"></tbody>
+                </table>
+                <div class="empty-state hidden" id="empty-state">No generations yet.</div>
             </div>
         </div>
     </div>
 
     <script>
-        const historyBody = document.getElementById('history-body');
-        const emptyState = document.getElementById('empty-state');
-
+        function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
         function fmtDuration(seconds) {
-            if (!seconds) return '—';
+            if (!seconds) return '\u2014';
             const m = Math.floor(seconds / 60);
             const s = Math.floor(seconds % 60);
             return m > 0 ? `${m}m ${s}s` : `${s}s`;
         }
 
-        // Load credits
+        // ===================== TABS =====================
+        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.admin-tab-content').forEach(c => c.style.display = 'none');
+                btn.classList.add('active');
+                document.getElementById(`admin-tab-${btn.dataset.tab}`).style.display = 'block';
+                if (btn.dataset.tab === 'channels') loadAdminChannels();
+            });
+        });
+
+        // ===================== STATS =====================
         async function loadCredits() {
             try {
                 const resp = await fetch('/admin/credits');
@@ -266,14 +270,12 @@
             } catch (e) { console.error('Credits load error:', e); }
         }
 
-        // Reset credits
         document.getElementById('reset-credits-btn').addEventListener('click', async () => {
             if (!confirm('Reset credits counter to 0?')) return;
             const resp = await fetch('/admin/credits/reset', { method: 'POST' });
             if (resp.ok) loadCredits();
         });
 
-        // Set credits manually
         document.getElementById('set-credits-btn').addEventListener('click', async () => {
             const input = document.getElementById('credits-set-input');
             const amount = parseInt(input.value);
@@ -283,10 +285,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ amount })
             });
-            if (resp.ok) {
-                input.value = '';
-                loadCredits();
-            }
+            if (resp.ok) { input.value = ''; loadCredits(); }
         });
 
         async function loadHistory() {
@@ -294,144 +293,77 @@
             if (resp.status === 401) { window.location.href = '/admin'; return; }
             const history = await resp.json();
 
-            // Stats
             document.getElementById('stat-total').textContent = history.length;
             document.getElementById('stat-complete').textContent = history.filter(h => h.status === 'complete').length;
             document.getElementById('stat-errors').textContent = history.filter(h => h.status === 'error').length;
             const totalSec = history.reduce((sum, h) => sum + (h.audio_duration || 0), 0);
             document.getElementById('stat-duration').textContent = fmtDuration(totalSec);
 
-            // Table
-            if (!history.length) {
-                emptyState.classList.remove('hidden');
-                return;
-            }
+            const historyBody = document.getElementById('history-body');
+            const emptyState = document.getElementById('empty-state');
+            if (!history.length) { emptyState.classList.remove('hidden'); return; }
 
-            historyBody.innerHTML = history.map(h => `
-                <tr>
-                    <td>${h.timestamp || '—'}</td>
-                    <td>${h.filename || '—'}</td>
+            historyBody.innerHTML = history.map(h => {
+                const channelName = h.channel_name || h.preset_name || '\u2014';
+                const formatLabel = h.format_label || h.animate_intro || '\u2014';
+                const fmtDisplay = typeof formatLabel === 'string' ? formatLabel.charAt(0).toUpperCase() + formatLabel.slice(1) : formatLabel;
+                return `<tr>
+                    <td>${h.timestamp || '\u2014'}</td>
+                    <td>${h.filename || '\u2014'}</td>
                     <td class="duration-fmt">${fmtDuration(h.audio_duration)}</td>
-                    <td>${h.scene_count || '—'}</td>
-                    <td>${h.preset_name || '—'}</td>
-                    <td class="hide-mobile">${typeof h.animate_intro === 'string' ? h.animate_intro.charAt(0).toUpperCase() + h.animate_intro.slice(1) : (h.animate_intro ? 'Yes' : 'No')}</td>
-                    <td>${h.credits_used || '—'}</td>
+                    <td>${h.scene_count || '\u2014'}</td>
+                    <td>${escHtml(channelName)}</td>
+                    <td class="hide-mobile">${escHtml(fmtDisplay)}</td>
+                    <td>${h.credits_used || '\u2014'}</td>
                     <td class="duration-fmt">${fmtDuration(h.processing_time)}</td>
                     <td><span class="status-badge ${h.status}">${h.status}</span></td>
-                    <td>${h.status === 'complete' && h.video_url ? `<a class="dl-link" href="${h.video_url}">Download</a>` : '—'}</td>
-                </tr>
-            `).join('');
+                    <td>${h.status === 'complete' && h.video_url ? `<a class="dl-link" href="${h.video_url}">Download</a>` : '\u2014'}</td>
+                </tr>`;
+            }).join('');
         }
 
         loadHistory();
         loadCredits();
 
-        // Admin tabs
-        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
-                document.querySelectorAll('.admin-tab-content').forEach(c => c.style.display = 'none');
-                btn.classList.add('active');
-                document.getElementById(`admin-tab-${btn.dataset.tab}`).style.display = 'block';
-                if (btn.dataset.tab === 'presets') loadAdminPresets();
-            });
-        });
+        // ===================== CHANNELS =====================
+        let adminChannelCache = [];
 
-        // Preset management
-        let adminTags = [];
-        let adminTagColors = {};
+        async function loadAdminChannels() {
+            const grid = document.getElementById('admin-channel-grid');
+            try {
+                const resp = await fetch('/api/channels');
+                adminChannelCache = await resp.json();
+                renderAdminChannelGrid();
+            } catch { grid.innerHTML = '<p style="color:var(--error)">Failed to load channels</p>'; }
+        }
 
-        function escHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-
-        // Tag builder
-        function renderAdminTags() {
-            const container = document.getElementById('admin-tag-pills');
-            container.innerHTML = adminTags.map(tag => {
-                const color = adminTagColors[tag] || '#5B9BD5';
-                return `<span style="font-size:0.72rem;font-weight:600;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(tag)} <button onclick="removeAdminTag('${escHtml(tag)}')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.85rem;padding:0 2px;opacity:0.6">&times;</button></span>`;
+        function renderAdminChannelGrid() {
+            const grid = document.getElementById('admin-channel-grid');
+            if (!adminChannelCache.length) {
+                grid.innerHTML = '<p class="empty-state">No channels configured yet.</p>';
+                return;
+            }
+            grid.innerHTML = adminChannelCache.map(ch => {
+                const hasLogo = ch.has_logo;
+                const formatBase = ch.format ? ch.format.base : 'pulse';
+                const hasSubject = ch.has_subject;
+                let logoHtml = hasLogo
+                    ? `<img class="admin-ch-logo" src="/api/channels/${ch.id}/logo.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="admin-ch-logo-ph" style="display:none">\uD83D\uDD27</div>`
+                    : `<div class="admin-ch-logo-ph">\uD83D\uDD27</div>`;
+                let tagsHtml = (ch.tags || []).map(t => {
+                    const color = (ch.tag_colors || {})[t] || '#5B9BD5';
+                    return `<span class="admin-ch-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
+                }).join('');
+                return `<div class="admin-ch-tile" data-id="${ch.id}" onclick="openEditPanel('${ch.id}')">
+                    <div class="admin-ch-logo-wrap">${logoHtml}</div>
+                    <div class="admin-ch-name">${escHtml(ch.name)}</div>
+                    <div class="admin-ch-meta">${formatBase} \u2022 ${hasSubject ? '\u2713 subject' : '\u2717 no subject'}</div>
+                    ${tagsHtml ? `<div class="admin-ch-tags">${tagsHtml}</div>` : ''}
+                </div>`;
             }).join('');
         }
-        window.removeAdminTag = function(tag) {
-            adminTags = adminTags.filter(t => t !== tag);
-            delete adminTagColors[tag];
-            renderAdminTags();
-        };
 
-        document.getElementById('admin-tag-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ',') {
-                e.preventDefault();
-                const tag = e.target.value.replace(/,/g, '').trim();
-                if (tag && !adminTags.includes(tag)) {
-                    adminTags.push(tag);
-                    adminTagColors[tag] = document.getElementById('admin-tag-color').value;
-                    e.target.value = '';
-                    renderAdminTags();
-                }
-            }
-        });
-
-        // Save preset
-        document.getElementById('admin-save-preset').addEventListener('click', async () => {
-            const name = document.getElementById('admin-preset-name').value.trim() || 'Untitled';
-            const styleText = document.getElementById('admin-style-text').value.trim();
-            const styleFile = document.getElementById('admin-style-file').files[0];
-            const subjectFile = document.getElementById('admin-subject-file').files[0];
-            if (!styleFile && !styleText) { alert('Provide a style image, text description, or both.'); return; }
-            const formData = new FormData();
-            formData.append('name', name);
-            formData.append('style_text', styleText);
-            formData.append('tags', adminTags.join(','));
-            formData.append('tag_colors', JSON.stringify(adminTagColors));
-            if (styleFile) formData.append('style', styleFile);
-            if (subjectFile) formData.append('subject', subjectFile);
-            const btn = document.getElementById('admin-save-preset');
-            btn.disabled = true; btn.textContent = 'Saving...';
-            try {
-                const resp = await fetch('/api/presets', { method: 'POST', body: formData });
-                if (resp.ok) {
-                    document.getElementById('admin-preset-name').value = '';
-                    document.getElementById('admin-style-text').value = '';
-                    document.getElementById('admin-style-file').value = '';
-                    document.getElementById('admin-subject-file').value = '';
-                    adminTags = []; adminTagColors = {}; renderAdminTags();
-                    loadAdminPresets();
-                    alert('Preset saved!');
-                } else {
-                    const data = await resp.json();
-                    alert(data.error || 'Save failed');
-                }
-            } catch { alert('Save failed'); }
-            btn.disabled = false; btn.textContent = 'Save Preset';
-        });
-
-        // Load presets gallery
-        async function loadAdminPresets() {
-            const gallery = document.getElementById('admin-preset-gallery');
-            try {
-                const resp = await fetch('/api/presets');
-                const presets = await resp.json();
-                if (!presets.length) { gallery.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:2rem">No presets yet</p>'; return; }
-                gallery.innerHTML = presets.map(p => `
-                    <div class="admin-preset-card">
-                        <img class="admin-preset-thumb" src="/api/presets/${p.id}/style.png" onerror="this.style.display='none'">
-                        <div class="admin-preset-info">
-                            <div class="admin-preset-name">${escHtml(p.name)}</div>
-                            <div class="admin-preset-meta">${p.has_subject ? 'Style + Subject' : 'Style only'}${p.style_text ? ' · Text prompt' : ''}</div>
-                            ${p.tags && p.tags.length ? `<div class="admin-preset-tags">${p.tags.map(t => {
-                                const color = (p.tag_colors || {})[t] || '#5B9BD5';
-                                return `<span class="admin-tag" style="background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(t)}</span>`;
-                            }).join('')}</div>` : ''}
-                        </div>
-                        <div class="admin-preset-actions">
-                            <button onclick="editAdminPreset('${p.id}')" class="btn btn-ghost btn-sm">Edit</button>
-                            <button onclick="deleteAdminPreset('${p.id}')" class="btn btn-ghost btn-sm" style="color:var(--error)">Delete</button>
-                        </div>
-                    </div>
-                `).join('');
-            } catch { gallery.innerHTML = '<p style="color:var(--error)">Failed to load presets</p>'; }
-        }
-
-        // Edit preset
+        // ===================== EDIT PANEL =====================
         let editTags = [];
         let editTagColors = {};
 
@@ -439,9 +371,10 @@
             const container = document.getElementById('edit-tag-pills');
             container.innerHTML = editTags.map(tag => {
                 const color = editTagColors[tag] || '#5B9BD5';
-                return `<span class="admin-tag" style="background:${color}20;color:${color};border:1px solid ${color}40;padding:3px 8px;font-size:0.72rem;display:inline-flex;align-items:center;gap:4px">${escHtml(tag)} <button onclick="removeEditTag('${escHtml(tag)}')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.85rem;padding:0;opacity:0.6">&times;</button></span>`;
+                return `<span style="font-size:0.72rem;font-weight:600;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(tag)} <button onclick="removeEditTag('${escHtml(tag)}')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.85rem;padding:0 2px;opacity:0.6">&times;</button></span>`;
             }).join('');
         }
+
         window.removeEditTag = function(tag) {
             editTags = editTags.filter(t => t !== tag);
             delete editTagColors[tag];
@@ -461,42 +394,91 @@
             }
         });
 
-        window.editAdminPreset = async function(id) {
-            const resp = await fetch(`/api/presets/${id}`);
-            if (!resp.ok) { alert('Failed to load preset'); return; }
-            const p = await resp.json();
-            document.getElementById('edit-preset-id').value = id;
-            document.getElementById('edit-preset-name').value = p.name || '';
-            document.getElementById('edit-style-text').value = p.style_text || '';
+        window.openEditPanel = async function(channelId) {
+            const resp = await fetch(`/api/channels/${channelId}`);
+            if (!resp.ok) { alert('Failed to load channel'); return; }
+            const ch = await resp.json();
+
+            document.getElementById('edit-ch-id').value = channelId;
+            document.getElementById('edit-panel-title').textContent = `Edit: ${ch.name}`;
+            document.getElementById('edit-ch-name-display').textContent = ch.name;
+
+            // Format display
+            const fmt = ch.format || {};
+            const base = fmt.base || 'pulse';
+            const fmtDetails = `${base.charAt(0).toUpperCase() + base.slice(1)} \u2014 intro ${fmt.intro_duration || 0}s, body ${fmt.body_scene_min_duration || 0}-${fmt.body_scene_max_duration || 0}s, animation: ${fmt.intro_animated ? 'intro' : 'none'}`;
+            document.getElementById('edit-ch-format-display').textContent = fmtDetails;
+
+            // Image previews
+            const logoPreview = document.getElementById('edit-logo-preview');
+            if (ch.has_logo) { logoPreview.src = `/api/channels/${channelId}/logo.png?t=${Date.now()}`; logoPreview.style.display = 'block'; }
+            else { logoPreview.style.display = 'none'; }
+
+            const stylePreview = document.getElementById('edit-style-preview');
+            if (ch.has_style_image) { stylePreview.src = `/api/channels/${channelId}/style.png?t=${Date.now()}`; stylePreview.style.display = 'block'; }
+            else { stylePreview.style.display = 'none'; }
+
+            const subjectPreview = document.getElementById('edit-subject-preview');
+            if (ch.has_subject) { subjectPreview.src = `/api/channels/${channelId}/subject.png?t=${Date.now()}`; subjectPreview.style.display = 'block'; }
+            else { subjectPreview.style.display = 'none'; }
+
+            // Clear file inputs and checkboxes
+            document.getElementById('edit-logo-file').value = '';
             document.getElementById('edit-style-file').value = '';
             document.getElementById('edit-subject-file').value = '';
-            editTags = p.tags || [];
-            editTagColors = p.tag_colors || {};
+            document.getElementById('edit-logo-remove').checked = false;
+            document.getElementById('edit-style-remove').checked = false;
+            document.getElementById('edit-subject-remove').checked = false;
+
+            // Text fields
+            document.getElementById('edit-style-text').value = ch.style_text || '';
+            document.getElementById('edit-scene-instructions').value = ch.scene_instructions || '';
+            document.getElementById('edit-image-instructions').value = ch.image_instructions || '';
+
+            // Tags
+            editTags = ch.tags || [];
+            editTagColors = ch.tag_colors || {};
             renderEditTags();
-            document.getElementById('edit-preset-overlay').classList.remove('hidden');
+
+            document.getElementById('edit-panel').style.display = 'block';
+            document.getElementById('edit-panel').scrollIntoView({ behavior: 'smooth' });
         };
 
-        document.getElementById('edit-preset-close').addEventListener('click', () => document.getElementById('edit-preset-overlay').classList.add('hidden'));
-        document.getElementById('edit-preset-cancel').addEventListener('click', () => document.getElementById('edit-preset-overlay').classList.add('hidden'));
+        document.getElementById('edit-panel-close').addEventListener('click', closeEditPanel);
+        document.getElementById('edit-ch-cancel').addEventListener('click', closeEditPanel);
 
-        document.getElementById('edit-preset-save').addEventListener('click', async () => {
-            const id = document.getElementById('edit-preset-id').value;
+        function closeEditPanel() {
+            document.getElementById('edit-panel').style.display = 'none';
+        }
+
+        // Save channel edits
+        document.getElementById('edit-ch-save').addEventListener('click', async () => {
+            const id = document.getElementById('edit-ch-id').value;
             const formData = new FormData();
-            formData.append('name', document.getElementById('edit-preset-name').value.trim());
             formData.append('style_text', document.getElementById('edit-style-text').value.trim());
+            formData.append('scene_instructions', document.getElementById('edit-scene-instructions').value.trim());
+            formData.append('image_instructions', document.getElementById('edit-image-instructions').value.trim());
             formData.append('tags', editTags.join(','));
             formData.append('tag_colors', JSON.stringify(editTagColors));
+
+            const logoFile = document.getElementById('edit-logo-file').files[0];
             const styleFile = document.getElementById('edit-style-file').files[0];
             const subjectFile = document.getElementById('edit-subject-file').files[0];
+            if (logoFile) formData.append('logo', logoFile);
             if (styleFile) formData.append('style', styleFile);
             if (subjectFile) formData.append('subject', subjectFile);
-            const btn = document.getElementById('edit-preset-save');
+
+            if (document.getElementById('edit-logo-remove').checked) formData.append('remove_logo', 'true');
+            if (document.getElementById('edit-style-remove').checked) formData.append('remove_style', 'true');
+            if (document.getElementById('edit-subject-remove').checked) formData.append('remove_subject', 'true');
+
+            const btn = document.getElementById('edit-ch-save');
             btn.disabled = true; btn.textContent = 'Saving...';
             try {
-                const resp = await fetch(`/api/presets/${id}`, { method: 'PUT', body: formData });
+                const resp = await fetch(`/api/channels/${id}`, { method: 'PUT', body: formData });
                 if (resp.ok) {
-                    document.getElementById('edit-preset-overlay').classList.add('hidden');
-                    loadAdminPresets();
+                    closeEditPanel();
+                    loadAdminChannels();
                 } else {
                     const data = await resp.json();
                     alert(data.error || 'Update failed');
@@ -505,20 +487,23 @@
             btn.disabled = false; btn.textContent = 'Save Changes';
         });
 
-        window.deleteAdminPreset = async function(id) {
-            if (!confirm('Delete this preset?')) return;
-            await fetch(`/api/presets/${id}`, { method: 'DELETE' });
-            loadAdminPresets();
-        };
+        // Delete channel
+        document.getElementById('edit-ch-delete').addEventListener('click', async () => {
+            const id = document.getElementById('edit-ch-id').value;
+            if (!confirm('Delete this channel? This cannot be undone.')) return;
+            await fetch(`/api/channels/${id}`, { method: 'DELETE' });
+            closeEditPanel();
+            loadAdminChannels();
+        });
 
-        // Export/Import
+        // ===================== EXPORT / IMPORT =====================
         document.getElementById('admin-export-btn').addEventListener('click', async () => {
-            const resp = await fetch('/api/presets/export');
+            const resp = await fetch('/api/channels/export');
             if (!resp.ok) { alert('Export failed'); return; }
             const blob = await resp.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = `presets-${new Date().toISOString().slice(0,10)}.json`; a.click();
+            a.href = url; a.download = `channels-${new Date().toISOString().slice(0, 10)}.json`; a.click();
             URL.revokeObjectURL(url);
         });
         document.getElementById('admin-import-btn').addEventListener('click', () => document.getElementById('admin-import-file').click());
@@ -526,9 +511,9 @@
             if (!e.target.files.length) return;
             const formData = new FormData();
             formData.append('file', e.target.files[0]);
-            const resp = await fetch('/api/presets/import', { method: 'POST', body: formData });
+            const resp = await fetch('/api/channels/import', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (resp.ok) { alert(`Imported ${data.count} preset(s)`); loadAdminPresets(); }
+            if (resp.ok) { alert(`Imported ${data.count} channel(s)`); loadAdminChannels(); }
             else alert(data.error || 'Import failed');
             e.target.value = '';
         });
