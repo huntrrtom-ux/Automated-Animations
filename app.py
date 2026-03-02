@@ -50,6 +50,7 @@ _active_sessions_lock = threading.Lock()
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'webm', 'mp4'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -76,15 +77,15 @@ BASE_FORMATS = {
         'label': 'Pulse',
         'description': 'Fast-paced entertainment',
         'intro_duration': 30,
-        'intro_animated': True,
+        'intro_animated': False,
         'intro_scene_min_duration': 1,
         'intro_scene_max_duration': 8,
         'body_scene_min_duration': 2,
         'body_scene_max_duration': 10,
         'body_animated': False,
-        'periodic_animation_interval': 600,
+        'periodic_animation_interval': 0,
         'periodic_animation_window': 30,
-        'ken_burns_effect': 'rotate_pulse',
+        'ken_burns_effect': 'none',
         'subject_mode': 'auto',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
@@ -264,6 +265,8 @@ def update_channel(channel_id, **fields):
             config[key] = fields[key]
     if 'format' in fields and fields['format'] is not None:
         config['format'] = fields['format']
+    if 'animation_pattern' in fields:
+        config.setdefault('format', {})['animation_pattern'] = fields['animation_pattern']
     if fields.get('style_data'):
         with open(os.path.join(channel_dir, 'style.png'), 'wb') as f:
             f.write(base64.b64decode(fields['style_data']))
@@ -286,6 +289,11 @@ def update_channel(channel_id, **fields):
         logo_path = os.path.join(channel_dir, 'logo.png')
         if os.path.exists(logo_path):
             os.remove(logo_path)
+    if fields.get('remove_style'):
+        style_path = os.path.join(channel_dir, 'style.png')
+        if os.path.exists(style_path):
+            os.remove(style_path)
+        config['has_style_image'] = False
     config['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
@@ -602,6 +610,39 @@ def transcribe_audio(filepath, session_id):
     
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(all_segments)} segments')
     return {'full_text': ' '.join(full_text_parts), 'segments': all_segments}
+
+
+def transcribe_audio_assemblyai(filepath, session_id):
+    """Transcribe audio using AssemblyAI for more accurate timestamps."""
+    import assemblyai as aai
+    aai.settings.api_key = ASSEMBLYAI_API_KEY
+    emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
+
+    config = aai.TranscriptionConfig(language_code="en")
+    transcriber = aai.Transcriber()
+    emit_progress(session_id, 'transcription', 5, 'Transcribing with AssemblyAI...')
+    transcript = transcriber.transcribe(filepath, config=config)
+
+    if transcript.status == aai.TranscriptStatus.error:
+        logger.error(f"AssemblyAI error: {transcript.error}")
+        raise Exception(f"AssemblyAI transcription failed: {transcript.error}")
+
+    segments = []
+    for sentence in transcript.sentences:
+        text = sentence.text.strip()
+        if text:
+            segments.append({
+                'start': sentence.start / 1000.0,  # ms to seconds
+                'end': sentence.end / 1000.0,
+                'text': text
+            })
+
+    logger.info(f"AssemblyAI complete: {len(segments)} segments")
+    if segments:
+        logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
+
+    emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
+    return {'full_text': transcript.text or '', 'segments': segments}
 
 
 # ===================== SCENE DETECTION =====================
@@ -1937,7 +1978,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
-        transcript_data = transcribe_audio(filepath, session_id)
+        if ASSEMBLYAI_API_KEY:
+            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+        else:
+            transcript_data = transcribe_audio(filepath, session_id)
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
@@ -2110,9 +2154,15 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             if scene['start_time'] < intro_end:
                 last_intro_idx = i
 
+        animation_pattern = format_config.get('animation_pattern', '')
         animated_count = 0
         for i, scene in enumerate(scenes):
-            if i <= last_intro_idx:
+            if animation_pattern == 'alternating':
+                # Alternate: animate even-indexed scenes (0, 2, 4, ...)
+                scene['is_video'] = (i % 2 == 0)
+                if scene['is_video']:
+                    animated_count += 1
+            elif i <= last_intro_idx:
                 # Intro zone — animate if intro_animated is True
                 scene['is_video'] = intro_animated
                 if intro_animated:
@@ -3053,6 +3103,11 @@ def update_channel_route(channel_id):
         fields['remove_subject'] = True
     if request.form.get('remove_logo') == 'true':
         fields['remove_logo'] = True
+    if request.form.get('remove_style') == 'true':
+        fields['remove_style'] = True
+    animation_pattern = request.form.get('animation_pattern')
+    if animation_pattern is not None:
+        fields['animation_pattern'] = animation_pattern
     if update_channel(channel_id, **fields):
         return jsonify({'ok': True, 'id': channel_id})
     return jsonify({'error': 'Channel not found'}), 404
@@ -3210,6 +3265,7 @@ def version():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY), 'gemini': bool(GEMINI_API_KEY),
+                    'assemblyai': bool(ASSEMBLYAI_API_KEY),
                     'whisk_keys': len(whisk_pool), 'whisk_pool': whisk_pool.status()})
 
 if __name__ == '__main__':

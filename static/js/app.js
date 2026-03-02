@@ -181,8 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const titleDisplay = title.length > 10 ? escHtml(title.substring(0, 10)) + '\u2026' : escHtml(title);
                 el.innerHTML = `
                     ${titleDisplay ? `<span class="recent-title-snippet">${titleDisplay}</span>` : ''}
-                    <span class="recent-channel-pill">${escHtml(channelName)}</span>
-                    <span class="recent-date">${date}</span>
+                    <span class="recent-date">${escHtml(channelName)} &middot; ${date}</span>
                     <span class="recent-status ${statusClass}">&bull;</span>
                 `;
                 el.addEventListener('click', () => reopenSession(item.session_id));

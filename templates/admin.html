@@ -124,6 +124,13 @@
                         <label class="ef-label">Format</label>
                         <div class="ef-readonly" id="edit-ch-format-display">—</div>
                     </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Animation Pattern</label>
+                        <select id="edit-animation-pattern" class="ef-input" style="padding:0.45rem 0.6rem;font-size:0.82rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);">
+                            <option value="">Default (format rules)</option>
+                            <option value="alternating">Alternating (every other scene animated)</option>
+                        </select>
+                    </div>
                     <div class="ef-images-row">
                         <div class="ef-image-box">
                             <label class="ef-label">Logo</label>
@@ -409,6 +416,7 @@
             const base = fmt.base || 'pulse';
             const fmtDetails = `${base.charAt(0).toUpperCase() + base.slice(1)} \u2014 intro ${fmt.intro_duration || 0}s, body ${fmt.body_scene_min_duration || 0}-${fmt.body_scene_max_duration || 0}s, animation: ${fmt.intro_animated ? 'intro' : 'none'}`;
             document.getElementById('edit-ch-format-display').textContent = fmtDetails;
+            document.getElementById('edit-animation-pattern').value = fmt.animation_pattern || '';
 
             // Image previews
             const logoPreview = document.getElementById('edit-logo-preview');
@@ -461,6 +469,7 @@
             formData.append('image_instructions', document.getElementById('edit-image-instructions').value.trim());
             formData.append('tags', editTags.join(','));
             formData.append('tag_colors', JSON.stringify(editTagColors));
+            formData.append('animation_pattern', document.getElementById('edit-animation-pattern').value);
 
             const logoFile = document.getElementById('edit-logo-file').files[0];
             const styleFile = document.getElementById('edit-style-file').files[0];
@@ -469,9 +478,16 @@
             if (styleFile) formData.append('style', styleFile);
             if (subjectFile) formData.append('subject', subjectFile);
 
-            if (document.getElementById('edit-logo-remove').checked) formData.append('remove_logo', 'true');
-            if (document.getElementById('edit-style-remove').checked) formData.append('remove_style', 'true');
-            if (document.getElementById('edit-subject-remove').checked) formData.append('remove_subject', 'true');
+            const removals = [];
+            if (document.getElementById('edit-logo-remove').checked) removals.push('logo');
+            if (document.getElementById('edit-style-remove').checked) removals.push('style image');
+            if (document.getElementById('edit-subject-remove').checked) removals.push('subject image');
+            if (removals.length > 0) {
+                if (!confirm(`Are you sure you want to remove: ${removals.join(', ')}? This cannot be undone.`)) return;
+            }
+            if (removals.includes('logo')) formData.append('remove_logo', 'true');
+            if (removals.includes('style image')) formData.append('remove_style', 'true');
+            if (removals.includes('subject image')) formData.append('remove_subject', 'true');
 
             const btn = document.getElementById('edit-ch-save');
             btn.disabled = true; btn.textContent = 'Saving...';

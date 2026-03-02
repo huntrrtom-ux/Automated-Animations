@@ -6,3 +6,4 @@ gunicorn==23.0.0
 gevent==24.11.1
 gevent-websocket==0.10.1
 requests==2.32.3
+assemblyai==0.35.1
