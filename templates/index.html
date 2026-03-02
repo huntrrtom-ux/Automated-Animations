@@ -10,9 +10,6 @@
     <link rel="icon" type="image/png" href="/static/img/cog.png">
 </head>
 <body>
-    <!-- Version Badge -->
-    <div class="version-badge">Beta v52</div>
-
     <!-- Header -->
     <header class="header">
         <div class="logo">
@@ -35,6 +32,12 @@
     </header>
 
     <main class="wizard-shell">
+        <!-- Ongoing generations indicator -->
+        <div id="active-gen-pill" class="active-gen-pill">
+            <span class="active-gen-dot" id="active-gen-dot"></span>
+            <span id="active-gen-text">Ongoing Generations: 0</span>
+        </div>
+
         <!-- Wizard step breadcrumb -->
         <div class="wizard-steps" id="wizard-steps">
             <span class="wiz-step active" data-step="home">Home</span>
@@ -238,7 +241,7 @@
 
     <footer class="footer">
         <p>Whisper &middot; Gemini &middot; Whisk &middot; Veo</p>
-        <button class="link-btn changelog-link" id="open-changelog">What's New &middot; v52</button>
+        <button class="link-btn changelog-link" id="open-changelog">What's New</button>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
