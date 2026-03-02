@@ -47,7 +47,7 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .wizard-shell { max-width: 720px; margin: 0 auto; padding: 0.5rem 1.5rem 4rem; }
 
 /* ===================== ACTIVE GENERATIONS PILL ===================== */
-.active-gen-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 999px; background: var(--bg-card); border: 1px solid var(--border); margin-bottom: 0.75rem; float: right; }
+.active-gen-pill { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 999px; background: var(--bg-card); border: 1px solid var(--border); margin: 0 auto 0.75rem; width: fit-content; }
 .active-gen-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .active-gen-dot.live { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse-dot 1.5s ease-in-out infinite; }
 .active-gen-dot.idle { background: var(--error); }
@@ -82,8 +82,11 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .recent-empty { color: var(--text-muted); font-size: 0.82rem; text-align: center; padding: 1rem; }
 .recent-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.2s; }
 .recent-item:hover { border-color: var(--accent); background: var(--accent-glow); }
-.recent-title-snippet { font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
-.recent-date { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; margin-left: auto; white-space: nowrap; }
+.recent-channel-name { font-size: 0.78rem; font-weight: 600; color: var(--text); flex-shrink: 0; white-space: nowrap; }
+.recent-title-snippet { font-size: 0.72rem; font-weight: 500; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
+.recent-right { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; flex-shrink: 0; }
+.recent-ago { font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; }
+.recent-date { font-size: 0.7rem; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
 .recent-status { font-size: 1.2rem; flex-shrink: 0; line-height: 1; }
 .recent-status.complete { color: var(--success); }
 .recent-status.error { color: var(--error); }

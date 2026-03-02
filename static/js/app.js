@@ -179,10 +179,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 const statusClass = item.status === 'complete' ? 'complete' : (item.status === 'error' ? 'error' : 'pending');
                 const title = item.project_title || '';
                 const titleDisplay = title.length > 10 ? escHtml(title.substring(0, 10)) + '\u2026' : escHtml(title);
+
+                // Time ago calculation
+                let agoText = '';
+                if (item.timestamp) {
+                    const diffMs = Date.now() - new Date(item.timestamp).getTime();
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffHrs = Math.floor(diffMins / 60);
+                    const diffDays = Math.floor(diffHrs / 24);
+                    if (diffMins < 1) agoText = 'just now';
+                    else if (diffMins < 60) agoText = `${diffMins}min ago`;
+                    else if (diffHrs < 24) agoText = `${diffHrs}hr${diffHrs > 1 ? 's' : ''} ago`;
+                    else agoText = `${diffDays}d ago`;
+                }
+
                 el.innerHTML = `
+                    <span class="recent-channel-name">${escHtml(channelName)}</span>
                     ${titleDisplay ? `<span class="recent-title-snippet">${titleDisplay}</span>` : ''}
-                    <span class="recent-date">${escHtml(channelName)} &middot; ${date}</span>
-                    <span class="recent-status ${statusClass}">&bull;</span>
+                    <span class="recent-right">
+                        ${agoText ? `<span class="recent-ago">${agoText}</span>` : ''}
+                        <span class="recent-date">${date}</span>
+                        <span class="recent-status ${statusClass}">&bull;</span>
+                    </span>
                 `;
                 el.addEventListener('click', () => reopenSession(item.session_id));
                 list.appendChild(el);
@@ -246,10 +264,19 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div class="tile-warning-tape"></div>`;
             }
 
+            let tileTagsHtml = '';
+            if (ch.tags && ch.tags.length) {
+                tileTagsHtml = `<div class="tile-tags">${ch.tags.map(t => {
+                    const color = (ch.tag_colors || {})[t] || 'var(--accent)';
+                    return `<span class="tile-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
+                }).join('')}</div>`;
+            }
+
             tile.innerHTML = `
                 <div class="tile-select-check">\u2713</div>
                 <div class="tile-logo-wrap">${logoHtml}</div>
                 <div class="tile-name">${escHtml(ch.name)}</div>
+                ${tileTagsHtml}
             `;
 
             tile.addEventListener('click', () => {
@@ -321,7 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>` : ''}
             <div class="summary-row">
                 <span class="summary-label">Subject</span>
-                <span class="summary-value">${ch.has_subject ? '\u2713 Yes' : '\u2717 No'}</span>
+                <span class="summary-value"${ch.has_subject ? ' style="color:var(--success)"' : ''}>${ch.has_subject ? '\u2713 Yes' : '\u2717 No'}</span>
             </div>
         `;
     }
