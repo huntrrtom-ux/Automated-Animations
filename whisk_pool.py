@@ -34,6 +34,8 @@ class WhiskPool:
         self.keys = []  # list of {'token': str, 'cookie': str, 'cooldown_until': float}
         self._index = 0
         self._lock = threading.Lock()
+        self._reservations = {}       # session_id -> key_index
+        self._reservation_counts = {} # key_index -> count of active reservations
         self._load_keys()
         logger.info(f"WhiskPool initialized with {len(self.keys)} key(s)")
 
@@ -143,6 +145,85 @@ class WhiskPool:
         self._load_keys()
         logger.info(f"WhiskPool reloaded: {old_count} -> {len(self.keys)} keys")
 
+    def reserve_key(self, session_id):
+        """Reserve a key for a generation session. Picks the key with fewest
+        active reservations for load balancing. Returns key dict or None."""
+        with self._lock:
+            if not self.keys:
+                return None
+
+            # If session already has a reservation, return that key
+            if session_id in self._reservations:
+                idx = self._reservations[session_id]
+                key = self.keys[idx]
+                return {
+                    'token': key['token'],
+                    'cookie': key['cookie'],
+                    'index': idx
+                }
+
+            now = time.time()
+
+            # Find available key with fewest reservations
+            best_idx = None
+            best_count = float('inf')
+            for idx, key in enumerate(self.keys):
+                if key['cooldown_until'] > now:
+                    continue
+                count = self._reservation_counts.get(idx, 0)
+                if count < best_count:
+                    best_count = count
+                    best_idx = idx
+
+            # If all cooling down, pick the one with fewest reservations
+            if best_idx is None:
+                best_idx = min(range(len(self.keys)),
+                               key=lambda i: (self._reservation_counts.get(i, 0),
+                                              self.keys[i]['cooldown_until']))
+
+            self._reservations[session_id] = best_idx
+            self._reservation_counts[best_idx] = self._reservation_counts.get(best_idx, 0) + 1
+            logger.info(f"Reserved key {best_idx+1}/{len(self.keys)} for session {session_id} "
+                        f"(active reservations on key: {self._reservation_counts[best_idx]})")
+
+            key = self.keys[best_idx]
+            return {
+                'token': key['token'],
+                'cookie': key['cookie'],
+                'index': best_idx
+            }
+
+    def get_reserved_key(self, session_id):
+        """Get the reserved key for a session. Falls back to get_next() if
+        no reservation exists (backward compat)."""
+        with self._lock:
+            if session_id in self._reservations:
+                idx = self._reservations[session_id]
+                key = self.keys[idx]
+                result = {
+                    'token': key['token'],
+                    'cookie': key['cookie'],
+                    'index': idx
+                }
+                now = time.time()
+                if key['cooldown_until'] > now:
+                    result['wait_seconds'] = key['cooldown_until'] - now
+                return result
+        # No reservation — fallback to round-robin
+        return self.get_next()
+
+    def release_key(self, session_id):
+        """Release a session's key reservation."""
+        with self._lock:
+            if session_id in self._reservations:
+                idx = self._reservations.pop(session_id)
+                count = self._reservation_counts.get(idx, 1)
+                if count <= 1:
+                    self._reservation_counts.pop(idx, None)
+                else:
+                    self._reservation_counts[idx] = count - 1
+                logger.info(f"Released key {idx+1}/{len(self.keys)} for session {session_id}")
+
     def __len__(self):
         return len(self.keys)
 
@@ -153,13 +234,16 @@ class WhiskPool:
             'total_keys': len(self.keys),
             'available': sum(1 for k in self.keys if k['cooldown_until'] <= now),
             'cooling_down': sum(1 for k in self.keys if k['cooldown_until'] > now),
+            'active_reservations': dict(self._reservation_counts),
+            'reserved_sessions': list(self._reservations.keys()),
             'keys': [
                 {
                     'index': i,
                     'has_token': bool(k['token']),
                     'has_cookie': bool(k['cookie']),
                     'available': k['cooldown_until'] <= now,
-                    'cooldown_remaining': max(0, k['cooldown_until'] - now)
+                    'cooldown_remaining': max(0, k['cooldown_until'] - now),
+                    'reservations': self._reservation_counts.get(i, 0)
                 }
                 for i, k in enumerate(self.keys)
             ]
