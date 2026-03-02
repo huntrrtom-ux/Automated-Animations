@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import logging
 import random
+import threading
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -1181,7 +1182,12 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     workflow_id = str(uuid.uuid4())
     session_ts = f";{int(time.time() * 1000)}"
     result = {"workflow_id": workflow_id, "session_ts": session_ts}
-    
+
+    # Store preset config for potential re-upload on session expiry
+    result['_preset_config'] = preset_config
+    result['_reupload_lock'] = threading.Lock()
+    result['_upload_time'] = time.time()
+
     # Pass style_text through to generation
     style_text = preset_config.get('style_text', '')
     result['style_text'] = style_text
@@ -1233,6 +1239,41 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     return result
 
 
+def reupload_preset_if_needed(whisk_session, session_id):
+    """Re-upload preset images when Whisk media IDs have expired (404).
+
+    Uses a lock so only one thread re-uploads; others wait and then use the fresh IDs.
+    Updates whisk_session dict in-place so all concurrent scenes benefit.
+    """
+    lock = whisk_session.get('_reupload_lock')
+    if not lock:
+        return
+    with lock:
+        # Check if another thread already re-uploaded recently (within last 60s)
+        if time.time() - whisk_session.get('_upload_time', 0) < 60:
+            logger.info(f"[{session_id}] Whisk session already refreshed by another thread, skipping re-upload")
+            return
+
+        preset_config = whisk_session.get('_preset_config')
+        if not preset_config:
+            logger.warning(f"[{session_id}] No _preset_config in whisk_session, cannot re-upload")
+            return
+
+        logger.info(f"[{session_id}] Re-uploading preset images to Whisk (media IDs expired)...")
+        fresh = upload_preset_images_to_whisk(preset_config, session_id)
+        if fresh == "TOKEN_EXPIRED":
+            logger.error(f"[{session_id}] Token expired during re-upload")
+            return
+
+        # Update the shared whisk_session dict in-place with fresh IDs
+        for key in ['style_media_id', 'subject_media_id', 'style_caption', 'subject_caption',
+                    'workflow_id', 'session_ts']:
+            if key in fresh:
+                whisk_session[key] = fresh[key]
+        whisk_session['_upload_time'] = time.time()
+        logger.info(f"[{session_id}] Whisk session refreshed with new media IDs")
+
+
 # ===================== PROMPT REPHRASING FOR FAILED SCENES =====================
 def rephrase_prompt(original_prompt):
     """Use Gemini to rephrase a visual description that triggered safety filters."""
@@ -1270,15 +1311,27 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
     # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
         current_prompt = prompt
+        session_refreshed = False
         for attempt in range(3):
             result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
             if result == "TOKEN_EXPIRED":
                 return result
-            if result is not None:
+            if result == "SESSION_EXPIRED" and not session_refreshed:
+                # Media IDs expired — re-upload preset images and retry with same prompt
+                logger.info(f"Session expired at scene {scene_num}, triggering re-upload...")
+                reupload_preset_if_needed(whisk_session, session_id)
+                session_refreshed = True
+                result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
+                if result == "TOKEN_EXPIRED":
+                    return result
+                if result is not None and result != "SESSION_EXPIRED":
+                    return result
+                # If still failing after re-upload, fall through to rephrase logic
+            if result is not None and result != "SESSION_EXPIRED":
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num}")
-                # Rephrase prompt after first failure to avoid hitting same safety filter
+                # Rephrase prompt after failure to avoid hitting same safety filter
                 current_prompt = rephrase_prompt(current_prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
@@ -1416,6 +1469,9 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     if response.status_code == 429:
         logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
         whisk_pool.mark_cooldown(key['index'], seconds=60)
+    if response.status_code == 404:
+        logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
+        return "SESSION_EXPIRED"
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
@@ -1747,15 +1803,28 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
            '-c', 'copy', temp_video]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
-    # Log concat video duration for debugging
+    # Validate concat video duration vs audio — pad with freeze frame if too short
     try:
         probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                                 '-of', 'default=noprint_wrappers=1:nokey=1', temp_video],
                                capture_output=True, text=True, timeout=30)
         concat_dur = float(probe.stdout.strip())
-        logger.info(f"Concat video duration: {concat_dur:.1f}s (audio={audio_duration:.1f}s, diff={concat_dur - audio_duration:.1f}s)")
-    except:
-        logger.warning("Could not probe concat video duration")
+        gap = audio_duration - concat_dur if audio_duration else 0
+        logger.info(f"Concat video duration: {concat_dur:.1f}s (audio={audio_duration:.1f}s, diff={gap:.1f}s)")
+        if gap > 2:
+            logger.warning(f"VIDEO SHORTER THAN AUDIO by {gap:.1f}s — padding with freeze frame of last scene")
+            padded_video = os.path.join(work_dir, 'concat_padded.mp4')
+            # Use tpad filter to freeze the last frame until audio_duration
+            pad_cmd = ['ffmpeg', '-y', '-i', temp_video,
+                       '-vf', f'tpad=stop_mode=clone:stop_duration={gap + 1}',
+                       '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
+                       '-pix_fmt', 'yuv420p', '-r', '25',
+                       padded_video]
+            subprocess.run(pad_cmd, check=True, capture_output=True, timeout=300)
+            temp_video = padded_video
+            logger.info(f"Padded video to cover audio duration")
+    except Exception as e:
+        logger.warning(f"Duration validation/padding failed: {e}")
 
     # Add audio — re-encode video to fix any timestamp issues from concat
     emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
