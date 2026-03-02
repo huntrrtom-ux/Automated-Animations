@@ -67,7 +67,10 @@
         .ef-readonly { font-size: 0.82rem; color: var(--text-secondary); padding: 0.5rem 0.75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
         .ef-images-row { display: flex; gap: 1rem; flex-wrap: wrap; }
         .ef-image-box { flex: 1; min-width: 120px; }
-        .ef-image-preview { width: 100%; max-height: 80px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 4px; background: var(--bg); }
+        .ef-image-wrap { position: relative; display: inline-block; width: 100%; margin-bottom: 4px; }
+        .ef-image-preview { width: 100%; max-height: 80px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); }
+        .ef-image-remove-btn { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--error); color: #fff; border: 2px solid var(--bg-card); font-size: 14px; font-weight: 700; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: transform 0.15s, background 0.15s; z-index: 2; }
+        .ef-image-remove-btn:hover { transform: scale(1.15); background: #e04444; }
         .ef-file-input { font-size: 0.78rem; }
         .ef-tags-wrap { display: flex; gap: 5px; flex-wrap: wrap; min-height: 0; margin-bottom: 5px; }
         .ef-tag-input-row { display: flex; gap: 6px; align-items: center; }
@@ -124,32 +127,34 @@
                         <label class="ef-label">Format</label>
                         <div class="ef-readonly" id="edit-ch-format-display">—</div>
                     </div>
-                    <div class="ef-field">
-                        <label class="ef-label">Animation Pattern</label>
-                        <select id="edit-animation-pattern" class="ef-input" style="padding:0.45rem 0.6rem;font-size:0.82rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);">
-                            <option value="">Default (format rules)</option>
-                            <option value="alternating">Alternating (every other scene animated)</option>
-                        </select>
-                    </div>
                     <div class="ef-images-row">
                         <div class="ef-image-box">
                             <label class="ef-label">Logo</label>
-                            <img id="edit-logo-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <div class="ef-image-wrap">
+                                <img id="edit-logo-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                                <button type="button" class="ef-image-remove-btn" id="edit-logo-remove-btn" style="display:none" title="Remove logo">&times;</button>
+                            </div>
                             <input type="file" id="edit-logo-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
                             <span style="font-size:0.65rem;color:var(--text-muted);display:block;margin-top:2px">Recommended: 800&times;800px</span>
-                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-logo-remove"> Remove logo</label>
+                            <input type="hidden" id="edit-logo-remove" value="">
                         </div>
                         <div class="ef-image-box">
                             <label class="ef-label">Style Image</label>
-                            <img id="edit-style-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <div class="ef-image-wrap">
+                                <img id="edit-style-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                                <button type="button" class="ef-image-remove-btn" id="edit-style-remove-btn" style="display:none" title="Remove style image">&times;</button>
+                            </div>
                             <input type="file" id="edit-style-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
-                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-style-remove"> Remove style</label>
+                            <input type="hidden" id="edit-style-remove" value="">
                         </div>
                         <div class="ef-image-box">
                             <label class="ef-label">Subject Image</label>
-                            <img id="edit-subject-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                            <div class="ef-image-wrap">
+                                <img id="edit-subject-preview" class="ef-image-preview" src="" alt="" style="display:none">
+                                <button type="button" class="ef-image-remove-btn" id="edit-subject-remove-btn" style="display:none" title="Remove subject image">&times;</button>
+                            </div>
                             <input type="file" id="edit-subject-file" accept=".png,.jpg,.jpeg,.webp" class="ef-file-input">
-                            <label style="font-size:0.68rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="edit-subject-remove"> Remove subject</label>
+                            <input type="hidden" id="edit-subject-remove" value="">
                         </div>
                     </div>
                     <div class="ef-field">
@@ -416,28 +421,30 @@
             const base = fmt.base || 'pulse';
             const fmtDetails = `${base.charAt(0).toUpperCase() + base.slice(1)} \u2014 intro ${fmt.intro_duration || 0}s, body ${fmt.body_scene_min_duration || 0}-${fmt.body_scene_max_duration || 0}s, animation: ${fmt.intro_animated ? 'intro' : 'none'}`;
             document.getElementById('edit-ch-format-display').textContent = fmtDetails;
-            document.getElementById('edit-animation-pattern').value = fmt.animation_pattern || '';
 
             // Image previews
             const logoPreview = document.getElementById('edit-logo-preview');
-            if (ch.has_logo) { logoPreview.src = `/api/channels/${channelId}/logo.png?t=${Date.now()}`; logoPreview.style.display = 'block'; }
-            else { logoPreview.style.display = 'none'; }
+            const logoRemoveBtn = document.getElementById('edit-logo-remove-btn');
+            if (ch.has_logo) { logoPreview.src = `/api/channels/${channelId}/logo.png?t=${Date.now()}`; logoPreview.style.display = 'block'; logoRemoveBtn.style.display = 'flex'; }
+            else { logoPreview.style.display = 'none'; logoRemoveBtn.style.display = 'none'; }
 
             const stylePreview = document.getElementById('edit-style-preview');
-            if (ch.has_style_image) { stylePreview.src = `/api/channels/${channelId}/style.png?t=${Date.now()}`; stylePreview.style.display = 'block'; }
-            else { stylePreview.style.display = 'none'; }
+            const styleRemoveBtn = document.getElementById('edit-style-remove-btn');
+            if (ch.has_style_image) { stylePreview.src = `/api/channels/${channelId}/style.png?t=${Date.now()}`; stylePreview.style.display = 'block'; styleRemoveBtn.style.display = 'flex'; }
+            else { stylePreview.style.display = 'none'; styleRemoveBtn.style.display = 'none'; }
 
             const subjectPreview = document.getElementById('edit-subject-preview');
-            if (ch.has_subject) { subjectPreview.src = `/api/channels/${channelId}/subject.png?t=${Date.now()}`; subjectPreview.style.display = 'block'; }
-            else { subjectPreview.style.display = 'none'; }
+            const subjectRemoveBtn = document.getElementById('edit-subject-remove-btn');
+            if (ch.has_subject) { subjectPreview.src = `/api/channels/${channelId}/subject.png?t=${Date.now()}`; subjectPreview.style.display = 'block'; subjectRemoveBtn.style.display = 'flex'; }
+            else { subjectPreview.style.display = 'none'; subjectRemoveBtn.style.display = 'none'; }
 
-            // Clear file inputs and checkboxes
+            // Clear file inputs and remove flags
             document.getElementById('edit-logo-file').value = '';
             document.getElementById('edit-style-file').value = '';
             document.getElementById('edit-subject-file').value = '';
-            document.getElementById('edit-logo-remove').checked = false;
-            document.getElementById('edit-style-remove').checked = false;
-            document.getElementById('edit-subject-remove').checked = false;
+            document.getElementById('edit-logo-remove').value = '';
+            document.getElementById('edit-style-remove').value = '';
+            document.getElementById('edit-subject-remove').value = '';
 
             // Text fields
             document.getElementById('edit-style-text').value = ch.style_text || '';
@@ -456,6 +463,23 @@
         document.getElementById('edit-panel-close').addEventListener('click', closeEditPanel);
         document.getElementById('edit-ch-cancel').addEventListener('click', closeEditPanel);
 
+        // Red X remove buttons for images
+        document.getElementById('edit-logo-remove-btn').addEventListener('click', () => {
+            document.getElementById('edit-logo-remove').value = 'true';
+            document.getElementById('edit-logo-preview').style.display = 'none';
+            document.getElementById('edit-logo-remove-btn').style.display = 'none';
+        });
+        document.getElementById('edit-style-remove-btn').addEventListener('click', () => {
+            document.getElementById('edit-style-remove').value = 'true';
+            document.getElementById('edit-style-preview').style.display = 'none';
+            document.getElementById('edit-style-remove-btn').style.display = 'none';
+        });
+        document.getElementById('edit-subject-remove-btn').addEventListener('click', () => {
+            document.getElementById('edit-subject-remove').value = 'true';
+            document.getElementById('edit-subject-preview').style.display = 'none';
+            document.getElementById('edit-subject-remove-btn').style.display = 'none';
+        });
+
         function closeEditPanel() {
             document.getElementById('edit-panel').style.display = 'none';
         }
@@ -469,7 +493,6 @@
             formData.append('image_instructions', document.getElementById('edit-image-instructions').value.trim());
             formData.append('tags', editTags.join(','));
             formData.append('tag_colors', JSON.stringify(editTagColors));
-            formData.append('animation_pattern', document.getElementById('edit-animation-pattern').value);
 
             const logoFile = document.getElementById('edit-logo-file').files[0];
             const styleFile = document.getElementById('edit-style-file').files[0];
@@ -479,12 +502,9 @@
             if (subjectFile) formData.append('subject', subjectFile);
 
             const removals = [];
-            if (document.getElementById('edit-logo-remove').checked) removals.push('logo');
-            if (document.getElementById('edit-style-remove').checked) removals.push('style image');
-            if (document.getElementById('edit-subject-remove').checked) removals.push('subject image');
-            if (removals.length > 0) {
-                if (!confirm(`Are you sure you want to remove: ${removals.join(', ')}? This cannot be undone.`)) return;
-            }
+            if (document.getElementById('edit-logo-remove').value === 'true') removals.push('logo');
+            if (document.getElementById('edit-style-remove').value === 'true') removals.push('style image');
+            if (document.getElementById('edit-subject-remove').value === 'true') removals.push('subject image');
             if (removals.includes('logo')) formData.append('remove_logo', 'true');
             if (removals.includes('style image')) formData.append('remove_style', 'true');
             if (removals.includes('subject image')) formData.append('remove_subject', 'true');
