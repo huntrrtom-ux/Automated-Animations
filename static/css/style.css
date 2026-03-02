@@ -46,6 +46,13 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .hidden { display: none !important; }
 .wizard-shell { max-width: 720px; margin: 0 auto; padding: 0.5rem 1.5rem 4rem; }
 
+/* ===================== ACTIVE GENERATIONS PILL ===================== */
+.active-gen-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 999px; background: var(--bg-card); border: 1px solid var(--border); margin-bottom: 0.75rem; }
+.active-gen-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.active-gen-dot.live { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse-dot 1.5s ease-in-out infinite; }
+.active-gen-dot.idle { background: var(--error); }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 /* ===================== WIZARD STEPS BREADCRUMB ===================== */
 .wizard-steps { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-bottom: 1.5rem; }
 .wiz-step { font-family: var(--font-display); font-size: 0.78rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0.3rem 0.6rem; border-radius: 6px; transition: all 0.2s; }
@@ -75,9 +82,9 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .recent-empty { color: var(--text-muted); font-size: 0.82rem; text-align: center; padding: 1rem; }
 .recent-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.2s; }
 .recent-item:hover { border-color: var(--accent); background: var(--accent-glow); }
-.recent-channel { font-weight: 600; font-size: 0.82rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-date { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; }
-.recent-duration { font-size: 0.72rem; color: var(--text-secondary); font-family: var(--font-display); font-weight: 600; flex-shrink: 0; }
+.recent-title-snippet { font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
+.recent-channel-pill { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 10px; border-radius: 999px; background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent); flex-shrink: 0; white-space: nowrap; }
+.recent-date { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; margin-left: auto; }
 .recent-status { font-size: 1.2rem; flex-shrink: 0; line-height: 1; }
 .recent-status.complete { color: var(--success); }
 .recent-status.error { color: var(--error); }
@@ -119,6 +126,7 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .summary-row + .summary-row { border-top: 1px solid var(--border); }
 .summary-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
 .summary-value { font-size: 0.85rem; font-weight: 500; }
+.summary-tag-pill { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 4px; }
 
 /* Upload Zone */
 .upload-zone { padding: 2.5rem 2rem; text-align: center; cursor: pointer; transition: background 0.2s; background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--radius-lg); }
@@ -310,8 +318,6 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .changelog-history summary:hover { color: var(--text-secondary); }
 .changelog-history .changelog-entry { opacity: 0.7; }
 
-/* Version Badge */
-.version-badge { position: fixed; top: 0.75rem; right: 0.75rem; z-index: 9000; font-family: var(--font-display); font-size: 0.62rem; font-weight: 600; color: var(--text-muted); background: rgba(255,255,255,0.05); border: 1px solid var(--border); padding: 0.2rem 0.55rem; border-radius: 3px; letter-spacing: 0.05em; text-transform: uppercase; pointer-events: none; opacity: 0.6; }
 
 /* Empty state */
 .empty-state { text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 2rem 0; }

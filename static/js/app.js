@@ -174,14 +174,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const el = document.createElement('div');
                 el.className = 'recent-item';
                 el.dataset.session = item.session_id;
-                const date = item.timestamp ? new Date(item.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-                const duration = item.audio_duration ? formatDuration(item.audio_duration) : '—';
+                const date = item.timestamp ? new Date(item.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '\u2014';
                 const channelName = item.channel_name || item.preset_name || 'Unknown';
                 const statusClass = item.status === 'complete' ? 'complete' : (item.status === 'error' ? 'error' : 'pending');
+                const title = item.project_title || '';
+                const titleDisplay = title.length > 10 ? escHtml(title.substring(0, 10)) + '\u2026' : escHtml(title);
                 el.innerHTML = `
-                    <span class="recent-channel">${escHtml(channelName)}</span>
+                    ${titleDisplay ? `<span class="recent-title-snippet">${titleDisplay}</span>` : ''}
+                    <span class="recent-channel-pill">${escHtml(channelName)}</span>
                     <span class="recent-date">${date}</span>
-                    <span class="recent-duration">${duration}</span>
                     <span class="recent-status ${statusClass}">&bull;</span>
                 `;
                 el.addEventListener('click', () => reopenSession(item.session_id));
@@ -236,9 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
             tile.dataset.id = ch.id;
 
             const hasLogo = ch.has_logo;
-            const hasSubject = ch.has_subject;
-            const formatBase = ch.format ? ch.format.base : 'pulse';
-            const formatIcons = { pulse: '\u26A1', flash: '\uD83C\uDF93', deep: '\uD83D\uDCDA' };
 
             let logoHtml;
             if (hasLogo) {
@@ -249,23 +247,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div class="tile-warning-tape"></div>`;
             }
 
-            let tagsHtml = '';
-            if (ch.tags && ch.tags.length) {
-                tagsHtml = ch.tags.map(t => {
-                    const color = (ch.tag_colors || {})[t] || 'var(--accent)';
-                    return `<span class="tile-tag" style="background:${color}20;color:${color};border-color:${color}40">${escHtml(t)}</span>`;
-                }).join('');
-            }
-
             tile.innerHTML = `
                 <div class="tile-select-check">\u2713</div>
                 <div class="tile-logo-wrap">${logoHtml}</div>
                 <div class="tile-name">${escHtml(ch.name)}</div>
-                <div class="tile-meta">
-                    <span class="tile-format">${formatIcons[formatBase] || ''} ${formatBase}</span>
-                    <span class="tile-subject ${hasSubject ? 'yes' : 'no'}">${hasSubject ? '\u2713 Subject' : '\u2717 No Subject'}</span>
-                </div>
-                ${tagsHtml ? `<div class="tile-tags">${tagsHtml}</div>` : ''}
             `;
 
             tile.addEventListener('click', () => {
@@ -310,8 +295,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const ch = selectedChannelData;
-        const formatBase = ch.format ? ch.format.base : 'pulse';
+        const formatBase = ch.format ? ch.format.base : 'flash';
         const formatLabel = ch.format ? (ch.format.label || formatBase) : formatBase;
+        const tailoredPrefix = ch.format_tailored ? 'Tailored ' : '';
+
+        let tagsHtml = '';
+        if (ch.tags && ch.tags.length) {
+            tagsHtml = ch.tags.map(t => {
+                const color = (ch.tag_colors || {})[t] || 'var(--accent)';
+                return `<span class="summary-tag-pill" style="background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(t)}</span>`;
+            }).join(' ');
+        }
+
         summary.innerHTML = `
             <div class="summary-row">
                 <span class="summary-label">Channel</span>
@@ -319,8 +314,12 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div class="summary-row">
                 <span class="summary-label">Format</span>
-                <span class="summary-value">${escHtml(formatLabel)}</span>
+                <span class="summary-value">${escHtml(tailoredPrefix + formatLabel)}</span>
             </div>
+            ${tagsHtml ? `<div class="summary-row">
+                <span class="summary-label">Tags</span>
+                <span class="summary-value">${tagsHtml}</span>
+            </div>` : ''}
             <div class="summary-row">
                 <span class="summary-label">Subject</span>
                 <span class="summary-value">${ch.has_subject ? '\u2713 Yes' : '\u2717 No'}</span>
@@ -797,6 +796,25 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('batch-complete-msg').textContent = `${completed} of ${total} scene${total > 1 ? 's' : ''} regenerated successfully`;
         document.getElementById('batch-complete-overlay').classList.remove('hidden');
     }
+
+    // ===================== ACTIVE GENERATIONS POLL =====================
+    async function pollActiveGenerations() {
+        try {
+            const resp = await fetch('/api/active-generations');
+            const data = await resp.json();
+            const count = data.count || 0;
+            const dot = document.getElementById('active-gen-dot');
+            const text = document.getElementById('active-gen-text');
+            text.textContent = `Ongoing Generations: ${count}`;
+            if (count > 0) {
+                dot.className = 'active-gen-dot live';
+            } else {
+                dot.className = 'active-gen-dot idle';
+            }
+        } catch (e) { /* ignore poll errors */ }
+    }
+    pollActiveGenerations();
+    setInterval(pollActiveGenerations, 5000);
 
     // ===================== INIT =====================
     loadRecentGenerations();

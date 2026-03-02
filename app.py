@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import logging
 import random
+import threading
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -41,6 +42,9 @@ os.makedirs(app.config['CHANNEL_FOLDER'], exist_ok=True)
 logger.info(f"Persistent storage: {PERSISTENT_DIR} ({'Railway volume' if PERSISTENT_DIR == '/data' else 'local'})")
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
+# Track active (in-progress) generation sessions
+active_sessions = {}
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -162,12 +166,20 @@ def get_all_channels():
                 channel_map[name] = config
             except Exception as e:
                 logger.error(f"Failed to load channel {name}: {e}")
-    order = get_channel_registry()
-    for cid in order:
-        if cid in channel_map:
-            channels.append(channel_map.pop(cid))
-    for cid in sorted(channel_map.keys()):
-        channels.append(channel_map[cid])
+    # Collect all channels then sort alphabetically by first tag (no tags at end)
+    channels = list(channel_map.values())
+    def _tag_sort_key(ch):
+        tags = ch.get('tags', [])
+        if tags:
+            return (0, tags[0].lower())
+        return (1, '')
+    channels.sort(key=_tag_sort_key)
+    # Add format_tailored flag: True if channel format differs from its base defaults
+    for ch in channels:
+        fmt = ch.get('format', {})
+        base_key = fmt.get('base', 'flash')
+        base_fmt = BASE_FORMATS.get(base_key, BASE_FORMATS['flash'])
+        ch['format_tailored'] = any(fmt.get(k) != base_fmt.get(k) for k in base_fmt if k not in ('base', 'label', 'description'))
     return channels
 
 def get_channel(channel_id):
@@ -189,6 +201,17 @@ def get_channel(channel_id):
             config['subject_base64'] = base64.b64encode(f.read()).decode('utf-8')
     return config
 
+def _resize_logo(path, size=800):
+    """Resize a logo image to size×size pixels for consistent quality."""
+    try:
+        img = Image.open(path)
+        img = img.convert('RGBA')
+        img = img.resize((size, size), Image.LANCZOS)
+        img.save(path, 'PNG')
+    except Exception as e:
+        logger.warning(f"Logo resize failed: {e}")
+
+
 def save_channel(name, base_format='pulse', style_data=None, subject_data=None, logo_data=None,
                  style_text='', tags='', tag_colors=None, scene_instructions='', image_instructions=''):
     channel_id = 'ch_' + str(uuid.uuid4())[:8]
@@ -201,8 +224,10 @@ def save_channel(name, base_format='pulse', style_data=None, subject_data=None, 
         with open(os.path.join(channel_dir, 'subject.png'), 'wb') as f:
             f.write(base64.b64decode(subject_data))
     if logo_data:
-        with open(os.path.join(channel_dir, 'logo.png'), 'wb') as f:
+        logo_path = os.path.join(channel_dir, 'logo.png')
+        with open(logo_path, 'wb') as f:
             f.write(base64.b64decode(logo_data))
+        _resize_logo(logo_path)
     tag_list = [t.strip() for t in tags.split(',') if t.strip()] if isinstance(tags, str) else (tags or [])
     format_config = copy.deepcopy(BASE_FORMATS.get(base_format, BASE_FORMATS['pulse']))
     config = {
@@ -246,8 +271,10 @@ def update_channel(channel_id, **fields):
             f.write(base64.b64decode(fields['subject_data']))
         config['has_subject'] = True
     if fields.get('logo_data'):
-        with open(os.path.join(channel_dir, 'logo.png'), 'wb') as f:
+        logo_path = os.path.join(channel_dir, 'logo.png')
+        with open(logo_path, 'wb') as f:
             f.write(base64.b64decode(fields['logo_data']))
+        _resize_logo(logo_path)
     if fields.get('remove_subject'):
         subject_path = os.path.join(channel_dir, 'subject.png')
         if os.path.exists(subject_path):
@@ -360,6 +387,121 @@ def migrate_presets_to_channels():
 
 # Run migration on startup
 migrate_presets_to_channels()
+
+
+def migrate_v53_channel_updates():
+    """One-time migration: switch all channels to flash, copy+rename Pet Psychology, rename others."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_v53.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== V53 MIGRATION: Starting channel updates ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+
+    # Build name->id map
+    name_to_id = {}
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                name_to_id[cfg.get('name', '')] = name
+            except Exception:
+                pass
+
+    # 1. Switch ALL channels to flash format
+    flash_format = copy.deepcopy(BASE_FORMATS['flash'])
+    for ch_name, ch_id in name_to_id.items():
+        config_path = os.path.join(channel_dir, ch_id, 'config.json')
+        with open(config_path, 'r') as f:
+            cfg = json.load(f)
+        cfg['format'] = copy.deepcopy(flash_format)
+        with open(config_path, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        logger.info(f"  Switched '{ch_name}' to flash format")
+
+    # 2. Copy+rename Pet Psychology - Flash -> 3 channels
+    pet_psych_id = name_to_id.get('Pet Psychology - Flash')
+    if pet_psych_id:
+        pet_src = os.path.join(channel_dir, pet_psych_id)
+        new_names = ['Psychology of Cats', 'Whisker Theory', 'Psychology of Dogs']
+        registry = get_channel_registry()
+
+        # Rename the original to the first new name
+        config_path = os.path.join(pet_src, 'config.json')
+        with open(config_path, 'r') as f:
+            cfg = json.load(f)
+        cfg['name'] = new_names[0]
+        cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+        with open(config_path, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        logger.info(f"  Renamed 'Pet Psychology - Flash' -> '{new_names[0]}'")
+
+        # Create 2 copies for the remaining names
+        for copy_name in new_names[1:]:
+            new_id = 'ch_' + str(uuid.uuid4())[:8]
+            new_dir = os.path.join(channel_dir, new_id)
+            shutil.copytree(pet_src, new_dir)
+            cp_config_path = os.path.join(new_dir, 'config.json')
+            with open(cp_config_path, 'r') as f:
+                cp_cfg = json.load(f)
+            cp_cfg['name'] = copy_name
+            cp_cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(cp_config_path, 'w') as f:
+                json.dump(cp_cfg, f, indent=2)
+            registry.append(new_id)
+            logger.info(f"  Created copy '{copy_name}' as {new_id}")
+
+        save_channel_registry(registry)
+    else:
+        logger.warning("  'Pet Psychology - Flash' not found, skipping copies")
+
+    # 3. Rename channels
+    renames = {
+        'Pastel - Pregnancy Advice - Flash': 'Mama Knowledge',
+        'Watercolour - Pregnancy Advice - Flash': 'Pregnancy with Grace',
+        'Fatherhood Advice - Flash': 'Coach Dan',
+        'Sally - Housing Market - Flash': 'Sally Saves',
+        'Betty - Housing Market - Flash': 'Financial Betty',
+        'Howard - Housing Market - Flash': 'Housing Howard',
+    }
+    # Re-read name map since Pet Psychology was renamed
+    name_to_id_fresh = {}
+    for dname in os.listdir(channel_dir):
+        if not dname.startswith('ch_'):
+            continue
+        cp = os.path.join(channel_dir, dname, 'config.json')
+        if os.path.exists(cp):
+            try:
+                with open(cp, 'r') as f:
+                    c = json.load(f)
+                name_to_id_fresh[c.get('name', '')] = dname
+            except Exception:
+                pass
+
+    for old_name, new_name in renames.items():
+        ch_id = name_to_id_fresh.get(old_name)
+        if ch_id:
+            cp = os.path.join(channel_dir, ch_id, 'config.json')
+            with open(cp, 'r') as f:
+                cfg = json.load(f)
+            cfg['name'] = new_name
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(cp, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            logger.info(f"  Renamed '{old_name}' -> '{new_name}'")
+        else:
+            logger.warning(f"  '{old_name}' not found, skipping rename")
+
+    # Write flag file
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== V53 MIGRATION COMPLETE ===")
+
+migrate_v53_channel_updates()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
@@ -1040,7 +1182,12 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     workflow_id = str(uuid.uuid4())
     session_ts = f";{int(time.time() * 1000)}"
     result = {"workflow_id": workflow_id, "session_ts": session_ts}
-    
+
+    # Store preset config for potential re-upload on session expiry
+    result['_preset_config'] = preset_config
+    result['_reupload_lock'] = threading.Lock()
+    result['_upload_time'] = time.time()
+
     # Pass style_text through to generation
     style_text = preset_config.get('style_text', '')
     result['style_text'] = style_text
@@ -1092,6 +1239,41 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     return result
 
 
+def reupload_preset_if_needed(whisk_session, session_id):
+    """Re-upload preset images when Whisk media IDs have expired (404).
+
+    Uses a lock so only one thread re-uploads; others wait and then use the fresh IDs.
+    Updates whisk_session dict in-place so all concurrent scenes benefit.
+    """
+    lock = whisk_session.get('_reupload_lock')
+    if not lock:
+        return
+    with lock:
+        # Check if another thread already re-uploaded recently (within last 60s)
+        if time.time() - whisk_session.get('_upload_time', 0) < 60:
+            logger.info(f"[{session_id}] Whisk session already refreshed by another thread, skipping re-upload")
+            return
+
+        preset_config = whisk_session.get('_preset_config')
+        if not preset_config:
+            logger.warning(f"[{session_id}] No _preset_config in whisk_session, cannot re-upload")
+            return
+
+        logger.info(f"[{session_id}] Re-uploading preset images to Whisk (media IDs expired)...")
+        fresh = upload_preset_images_to_whisk(preset_config, session_id)
+        if fresh == "TOKEN_EXPIRED":
+            logger.error(f"[{session_id}] Token expired during re-upload")
+            return
+
+        # Update the shared whisk_session dict in-place with fresh IDs
+        for key in ['style_media_id', 'subject_media_id', 'style_caption', 'subject_caption',
+                    'workflow_id', 'session_ts']:
+            if key in fresh:
+                whisk_session[key] = fresh[key]
+        whisk_session['_upload_time'] = time.time()
+        logger.info(f"[{session_id}] Whisk session refreshed with new media IDs")
+
+
 # ===================== PROMPT REPHRASING FOR FAILED SCENES =====================
 def rephrase_prompt(original_prompt):
     """Use Gemini to rephrase a visual description that triggered safety filters."""
@@ -1129,15 +1311,27 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
     # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
         current_prompt = prompt
+        session_refreshed = False
         for attempt in range(3):
             result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
             if result == "TOKEN_EXPIRED":
                 return result
-            if result is not None:
+            if result == "SESSION_EXPIRED" and not session_refreshed:
+                # Media IDs expired — re-upload preset images and retry with same prompt
+                logger.info(f"Session expired at scene {scene_num}, triggering re-upload...")
+                reupload_preset_if_needed(whisk_session, session_id)
+                session_refreshed = True
+                result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
+                if result == "TOKEN_EXPIRED":
+                    return result
+                if result is not None and result != "SESSION_EXPIRED":
+                    return result
+                # If still failing after re-upload, fall through to rephrase logic
+            if result is not None and result != "SESSION_EXPIRED":
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num}")
-                # Rephrase prompt after first failure to avoid hitting same safety filter
+                # Rephrase prompt after failure to avoid hitting same safety filter
                 current_prompt = rephrase_prompt(current_prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
@@ -1275,6 +1469,9 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     if response.status_code == 429:
         logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
         whisk_pool.mark_cooldown(key['index'], seconds=60)
+    if response.status_code == 404:
+        logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
+        return "SESSION_EXPIRED"
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
@@ -1606,15 +1803,28 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
            '-c', 'copy', temp_video]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
 
-    # Log concat video duration for debugging
+    # Validate concat video duration vs audio — pad with freeze frame if too short
     try:
         probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                                 '-of', 'default=noprint_wrappers=1:nokey=1', temp_video],
                                capture_output=True, text=True, timeout=30)
         concat_dur = float(probe.stdout.strip())
-        logger.info(f"Concat video duration: {concat_dur:.1f}s (audio={audio_duration:.1f}s, diff={concat_dur - audio_duration:.1f}s)")
-    except:
-        logger.warning("Could not probe concat video duration")
+        gap = audio_duration - concat_dur if audio_duration else 0
+        logger.info(f"Concat video duration: {concat_dur:.1f}s (audio={audio_duration:.1f}s, diff={gap:.1f}s)")
+        if gap > 2:
+            logger.warning(f"VIDEO SHORTER THAN AUDIO by {gap:.1f}s — padding with freeze frame of last scene")
+            padded_video = os.path.join(work_dir, 'concat_padded.mp4')
+            # Use tpad filter to freeze the last frame until audio_duration
+            pad_cmd = ['ffmpeg', '-y', '-i', temp_video,
+                       '-vf', f'tpad=stop_mode=clone:stop_duration={gap + 1}',
+                       '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
+                       '-pix_fmt', 'yuv420p', '-r', '25',
+                       padded_video]
+            subprocess.run(pad_cmd, check=True, capture_output=True, timeout=300)
+            temp_video = padded_video
+            logger.info(f"Padded video to cover audio duration")
+    except Exception as e:
+        logger.warning(f"Duration validation/padding failed: {e}")
 
     # Add audio — re-encode video to fix any timestamp issues from concat
     emit_progress(session_id, 'compositing', 94, 'Syncing with audio...')
@@ -1639,6 +1849,12 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 # ===================== MAIN PIPELINE =====================
 def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
+    # Track this session as active
+    active_sessions[session_id] = {
+        'channel_id': channel_id,
+        'project_title': project_title,
+        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+    }
     try:
         start_time_ts = time.time()
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
@@ -2195,6 +2411,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         with open(os.path.join(work_dir, 'generation_state.json'), 'w') as f:
             json.dump(generation_state, f, indent=2)
 
+        active_sessions.pop(session_id, None)
         emit_progress(session_id, 'complete', 100, 'Processing complete!', {
             'video_url': f'/download/{session_id}/{output_filename}',
             'scenes': scenes,
@@ -2219,6 +2436,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             'processing_time': processing_time,
             'status': 'complete',
             'video_url': f'/download/{session_id}/{output_filename}',
+            'project_title': project_title,
             # Backward compat
             'preset_id': channel_id or 'none',
             'preset_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
@@ -2227,6 +2445,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         
         return output_path
     except Exception as e:
+        active_sessions.pop(session_id, None)
         logger.error(f"Pipeline error: {e}", exc_info=True)
         emit_progress(session_id, 'error', 0, f'Error: {str(e)}')
         
@@ -2239,6 +2458,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             'channel_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
             'status': 'error',
             'error': str(e),
+            'project_title': project_title,
             # Backward compat
             'preset_id': channel_id or 'none'
         })
@@ -2839,6 +3059,11 @@ def import_channels():
     return jsonify({'ok': True, 'count': count})
 
 # ===================== SESSION STATE & RECENT GENERATIONS =====================
+@app.route('/api/active-generations')
+def get_active_generations():
+    """Return count of currently processing generations."""
+    return jsonify({'count': len(active_sessions)})
+
 @app.route('/api/recent-generations')
 def recent_generations():
     """Public endpoint: last 10 generations for the home screen."""
@@ -2846,7 +3071,7 @@ def recent_generations():
     recent = history[:10]
     safe_fields = ['session_id', 'timestamp', 'audio_duration', 'scene_count',
                    'channel_name', 'preset_name', 'format_label', 'animate_intro',
-                   'status', 'video_url']
+                   'status', 'video_url', 'project_title']
     return jsonify([{k: h.get(k) for k in safe_fields if k in h} for h in recent])
 
 @app.route('/api/session/<session_id>/state')
