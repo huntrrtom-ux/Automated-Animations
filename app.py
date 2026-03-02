@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import logging
 import random
+import tempfile
 import threading
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
@@ -45,9 +46,11 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Track active (in-progress) generation sessions
 active_sessions = {}
+_active_sessions_lock = threading.Lock()
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'webm', 'mp4'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -74,15 +77,15 @@ BASE_FORMATS = {
         'label': 'Pulse',
         'description': 'Fast-paced entertainment',
         'intro_duration': 30,
-        'intro_animated': True,
+        'intro_animated': False,
         'intro_scene_min_duration': 1,
         'intro_scene_max_duration': 8,
         'body_scene_min_duration': 2,
         'body_scene_max_duration': 10,
         'body_animated': False,
-        'periodic_animation_interval': 600,
+        'periodic_animation_interval': 0,
         'periodic_animation_window': 30,
-        'ken_burns_effect': 'rotate_pulse',
+        'ken_burns_effect': 'none',
         'subject_mode': 'auto',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
@@ -262,6 +265,8 @@ def update_channel(channel_id, **fields):
             config[key] = fields[key]
     if 'format' in fields and fields['format'] is not None:
         config['format'] = fields['format']
+    if 'animation_pattern' in fields:
+        config.setdefault('format', {})['animation_pattern'] = fields['animation_pattern']
     if fields.get('style_data'):
         with open(os.path.join(channel_dir, 'style.png'), 'wb') as f:
             f.write(base64.b64decode(fields['style_data']))
@@ -284,6 +289,11 @@ def update_channel(channel_id, **fields):
         logo_path = os.path.join(channel_dir, 'logo.png')
         if os.path.exists(logo_path):
             os.remove(logo_path)
+    if fields.get('remove_style'):
+        style_path = os.path.join(channel_dir, 'style.png')
+        if os.path.exists(style_path):
+            os.remove(style_path)
+        config['has_style_image'] = False
     config['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
@@ -602,12 +612,45 @@ def transcribe_audio(filepath, session_id):
     return {'full_text': ' '.join(full_text_parts), 'segments': all_segments}
 
 
+def transcribe_audio_assemblyai(filepath, session_id):
+    """Transcribe audio using AssemblyAI for more accurate timestamps."""
+    import assemblyai as aai
+    aai.settings.api_key = ASSEMBLYAI_API_KEY
+    emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
+
+    config = aai.TranscriptionConfig(language_code="en")
+    transcriber = aai.Transcriber()
+    emit_progress(session_id, 'transcription', 5, 'Transcribing with AssemblyAI...')
+    transcript = transcriber.transcribe(filepath, config=config)
+
+    if transcript.status == aai.TranscriptStatus.error:
+        logger.error(f"AssemblyAI error: {transcript.error}")
+        raise Exception(f"AssemblyAI transcription failed: {transcript.error}")
+
+    segments = []
+    for sentence in transcript.sentences:
+        text = sentence.text.strip()
+        if text:
+            segments.append({
+                'start': sentence.start / 1000.0,  # ms to seconds
+                'end': sentence.end / 1000.0,
+                'text': text
+            })
+
+    logger.info(f"AssemblyAI complete: {len(segments)} segments")
+    if segments:
+        logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
+
+    emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
+    return {'full_text': transcript.text or '', 'segments': segments}
+
+
 # ===================== SCENE DETECTION =====================
 def get_format_scene_rules(format_config, audio_duration):
     """Build scene rules prompt dynamically from a channel's format config dict."""
     if isinstance(format_config, str):
         # Backward compat: if a string was passed, look up the base format
-        format_config = BASE_FORMATS.get(format_config, BASE_FORMATS['pulse'])
+        format_config = copy.deepcopy(BASE_FORMATS.get(format_config, BASE_FORMATS['pulse']))
 
     label = format_config.get('label', format_config.get('base', 'Custom')).upper()
     desc = format_config.get('description', '')
@@ -680,7 +723,7 @@ def get_format_subject_rules(format_config, has_subject):
         return ""
 
     if isinstance(format_config, str):
-        format_config = BASE_FORMATS.get(format_config, BASE_FORMATS['pulse'])
+        format_config = copy.deepcopy(BASE_FORMATS.get(format_config, BASE_FORMATS['pulse']))
 
     subject_mode = format_config.get('subject_mode', 'auto')
     subject_interval = format_config.get('subject_interval', 300)
@@ -745,7 +788,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
     all_scenes = []
 
     if format_config is None:
-        format_config = BASE_FORMATS['pulse']
+        format_config = copy.deepcopy(BASE_FORMATS['pulse'])
     format_rules = get_format_scene_rules(format_config, audio_duration)
     subject_note = get_format_subject_rules(format_config, has_subject)
 
@@ -1128,8 +1171,8 @@ def whisk_cookie_headers():
 
 
 # ===================== WHISK CAPTION & UPLOAD =====================
-def caption_image_whisk(image_base64, media_category, workflow_id, session_ts):
-    headers = whisk_cookie_headers()
+def caption_image_whisk(image_base64, media_category, workflow_id, session_ts, key=None):
+    headers = whisk_cookie_headers_for(key) if key else whisk_cookie_headers()
     if not image_base64.startswith('data:'):
         image_base64 = f"data:image/png;base64,{image_base64}"
     payload = {"json": {"captionInput": {"candidatesCount": 1, "mediaInput": {"mediaCategory": media_category}},
@@ -1151,8 +1194,8 @@ def caption_image_whisk(image_base64, media_category, workflow_id, session_ts):
         logger.error(f"Caption error: {e}")
     return ""
 
-def upload_image_to_whisk(image_base64, media_category, caption, workflow_id, session_ts):
-    headers = whisk_cookie_headers()
+def upload_image_to_whisk(image_base64, media_category, caption, workflow_id, session_ts, key=None):
+    headers = whisk_cookie_headers_for(key) if key else whisk_cookie_headers()
     if not image_base64.startswith('data:'):
         image_base64 = f"data:image/png;base64,{image_base64}"
     payload = {"json": {"clientContext": {"workflowId": workflow_id, "sessionId": session_ts},
@@ -1179,9 +1222,23 @@ def upload_image_to_whisk(image_base64, media_category, caption, workflow_id, se
 
 
 def upload_preset_images_to_whisk(preset_config, session_id):
+    # Pin a Whisk key for this session's entire lifecycle to prevent
+    # cross-contamination between concurrent generations
+    pinned_key = whisk_pool.reserve_key(session_id)
+    if not pinned_key:
+        logger.error(f"[{session_id}] No Whisk keys available for upload")
+        return None
+    if pinned_key.get('wait_seconds', 0) > 0:
+        wait = min(pinned_key['wait_seconds'], 30)
+        logger.info(f"[{session_id}] Waiting {wait:.0f}s for reserved key {pinned_key['index']+1}")
+        time.sleep(wait)
+
     workflow_id = str(uuid.uuid4())
     session_ts = f";{int(time.time() * 1000)}"
     result = {"workflow_id": workflow_id, "session_ts": session_ts}
+
+    # Store pinned key index so generation functions use the same key
+    result['_pinned_key_index'] = pinned_key['index']
 
     # Store preset config for potential re-upload on session expiry
     result['_preset_config'] = preset_config
@@ -1194,7 +1251,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
     if preset_config.get('style_base64'):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
-        auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts)
+        auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
         style_caption = (
             "ABSOLUTE STYLE LOCK. Every generated image MUST exactly match this art style: "
             "the line work, outlines, color palette, shading technique, and rendering aesthetic. "
@@ -1209,7 +1266,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
-        style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", style_caption, workflow_id, session_ts)
+        style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", style_caption, workflow_id, session_ts, key=pinned_key)
         if style_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
         result['style_media_id'] = style_id
@@ -1219,7 +1276,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
     if preset_config.get('subject_base64'):
         emit_progress(session_id, 'generation', 29, 'Captioning subject...')
-        auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts)
+        auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
         subject_caption = (
             "CHARACTER IDENTITY REFERENCE. This character's face, body type, hair, and clothing should be used "
             "as identity reference ONLY. The character MUST be drawn with different poses, facial expressions, "
@@ -1231,7 +1288,7 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         result['subject_caption'] = subject_caption
 
         emit_progress(session_id, 'generation', 29, 'Uploading subject character...')
-        subject_id = upload_image_to_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", subject_caption, workflow_id, session_ts)
+        subject_id = upload_image_to_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", subject_caption, workflow_id, session_ts, key=pinned_key)
         if subject_id == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
         result['subject_media_id'] = subject_id
@@ -1267,7 +1324,7 @@ def reupload_preset_if_needed(whisk_session, session_id):
 
         # Update the shared whisk_session dict in-place with fresh IDs
         for key in ['style_media_id', 'subject_media_id', 'style_caption', 'subject_caption',
-                    'workflow_id', 'session_ts']:
+                    'workflow_id', 'session_ts', '_pinned_key_index']:
             if key in fresh:
                 whisk_session[key] = fresh[key]
         whisk_session['_upload_time'] = time.time()
@@ -1345,7 +1402,14 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
     else:
         full_prompt = prompt
 
-    headers = whisk_bearer_headers()
+    # Use reserved key if available, otherwise round-robin
+    key = whisk_pool.get_reserved_key(session_id)
+    if not key:
+        create_placeholder_image(prompt, output_path)
+        return None
+    if key.get('wait_seconds', 0) > 0:
+        time.sleep(min(key['wait_seconds'], 30))
+    headers = whisk_bearer_headers_for(key)
     json_data = {
         "clientContext": {"workflowId": str(uuid.uuid4()), "tool": "BACKBONE", "sessionId": f";{int(time.time()*1000)}"},
         "imageModelSettings": {"imageModel": "IMAGEN_3_5", "aspectRatio": "IMAGE_ASPECT_RATIO_LANDSCAPE"},
@@ -1380,7 +1444,15 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
 
 
 def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject=False):
-    key = get_whisk_key()
+    # Use pinned key from whisk_session to stay on the same Google account
+    # where subject/style media IDs were uploaded
+    pinned_index = whisk_session.get('_pinned_key_index')
+    if pinned_index is not None:
+        key = whisk_pool.get_reserved_key(session_id)
+        if key and key.get('wait_seconds', 0) > 0:
+            time.sleep(min(key['wait_seconds'], 30))
+    else:
+        key = get_whisk_key()
     if not key:
         return None
     headers = {
@@ -1442,30 +1514,52 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         return None
     logger.info(f"Whisk recipe response for scene {scene_num}: {response.status_code}")
 
-    # Token expired — mark key and try next one from pool
+    # Token expired — handle based on whether key is pinned
     if response.status_code == 401:
-        logger.warning(f"Token expired at scene {scene_num} (key {key['index']+1}). Trying next key...")
+        logger.warning(f"Token expired at scene {scene_num} (key {key['index']+1})")
         whisk_pool.mark_expired(key['index'])
-        next_key = get_whisk_key()
-        if next_key:
-            headers["authorization"] = f"Bearer {next_key['token']}"
-            key = next_key
-            emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...')
-            try:
-                response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
-                                    data=json.dumps(json_data), headers=headers, timeout=120)
-            except (ConnectionError, Exception) as e:
-                logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
-                return None
-            logger.info(f"Whisk retry with key {key['index']+1} for scene {scene_num}: {response.status_code}")
-            if response.status_code == 401:
-                whisk_pool.mark_expired(key['index'])
+        if pinned_index is not None:
+            # Pinned key: can't switch keys (media IDs are tied to this account)
+            # Wait for cooldown then retry with same key
+            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} expired — retrying after cooldown...')
+            time.sleep(10)
+            key = whisk_pool.get_reserved_key(session_id)
+            if key and key.get('wait_seconds', 0) > 0:
+                time.sleep(min(key['wait_seconds'], 30))
+            if key:
+                headers["authorization"] = f"Bearer {key['token']}"
+                try:
+                    response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                                        data=json.dumps(json_data), headers=headers, timeout=120)
+                except (ConnectionError, Exception) as e:
+                    logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
+                    return None
+                if response.status_code == 401:
+                    return "TOKEN_EXPIRED"
+            else:
                 return "TOKEN_EXPIRED"
         else:
-            emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
-            time.sleep(60)
-            whisk_pool.reload_from_env()
-            return "TOKEN_EXPIRED"
+            # Unpinned: old behavior — try next key from pool
+            next_key = get_whisk_key()
+            if next_key:
+                headers["authorization"] = f"Bearer {next_key['token']}"
+                key = next_key
+                emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...')
+                try:
+                    response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
+                                        data=json.dumps(json_data), headers=headers, timeout=120)
+                except (ConnectionError, Exception) as e:
+                    logger.warning(f"Whisk retry connection error for scene {scene_num}: {e}")
+                    return None
+                logger.info(f"Whisk retry with key {key['index']+1} for scene {scene_num}: {response.status_code}")
+                if response.status_code == 401:
+                    whisk_pool.mark_expired(key['index'])
+                    return "TOKEN_EXPIRED"
+            else:
+                emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
+                time.sleep(60)
+                whisk_pool.reload_from_env()
+                return "TOKEN_EXPIRED"
     if response.status_code == 429:
         logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
         whisk_pool.mark_cooldown(key['index'], seconds=60)
@@ -1509,9 +1603,12 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
 # ===================== ANIMATION =====================
 def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
-    key = get_whisk_key()
+    # Use reserved key if available for consistency with upload account
+    key = whisk_pool.get_reserved_key(session_id)
     if not key:
         return False
+    if key.get('wait_seconds', 0) > 0:
+        time.sleep(min(key['wait_seconds'], 30))
     headers = whisk_bearer_headers_for(key)
     session_ts = f";{int(time.time() * 1000)}"
     raw_bytes = image_info.get("encoded_image", "")
@@ -1539,8 +1636,11 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
             return "TOKEN_EXPIRED"
         if response.status_code == 429:
             whisk_pool.mark_cooldown(key['index'], seconds=30 * (attempt + 1))
-            key = get_whisk_key()
+            # Stay on reserved key to maintain account consistency
+            key = whisk_pool.get_reserved_key(session_id)
             if key:
+                if key.get('wait_seconds', 0) > 0:
+                    time.sleep(min(key['wait_seconds'], 30))
                 headers = whisk_bearer_headers_for(key)
             time.sleep(30 * (attempt + 1))
             continue
@@ -1850,11 +1950,12 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 # ===================== MAIN PIPELINE =====================
 def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
     # Track this session as active
-    active_sessions[session_id] = {
-        'channel_id': channel_id,
-        'project_title': project_title,
-        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-    }
+    with _active_sessions_lock:
+        active_sessions[session_id] = {
+            'channel_id': channel_id,
+            'project_title': project_title,
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        }
     try:
         start_time_ts = time.time()
         work_dir = os.path.join(app.config['OUTPUT_FOLDER'], session_id)
@@ -1870,14 +1971,17 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 has_subject = channel_config.get('has_subject', False)
                 format_config = channel_config.get('format')
         if not format_config:
-            format_config = BASE_FORMATS['pulse']
+            format_config = copy.deepcopy(BASE_FORMATS['pulse'])
         # For backward compat, keep preset_config alias for upload_preset_images_to_whisk
         preset_config = channel_config
 
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
-        transcript_data = transcribe_audio(filepath, session_id)
+        if ASSEMBLYAI_API_KEY:
+            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+        else:
+            transcript_data = transcribe_audio(filepath, session_id)
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
@@ -2050,9 +2154,15 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             if scene['start_time'] < intro_end:
                 last_intro_idx = i
 
+        animation_pattern = format_config.get('animation_pattern', '')
         animated_count = 0
         for i, scene in enumerate(scenes):
-            if i <= last_intro_idx:
+            if animation_pattern == 'alternating':
+                # Alternate: animate even-indexed scenes (0, 2, 4, ...)
+                scene['is_video'] = (i % 2 == 0)
+                if scene['is_video']:
+                    animated_count += 1
+            elif i <= last_intro_idx:
                 # Intro zone — animate if intro_animated is True
                 scene['is_video'] = intro_animated
                 if intro_animated:
@@ -2090,6 +2200,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             emit_progress(session_id, 'generation', 28, 'Uploading style/subject to Whisk...')
             whisk_session = upload_preset_images_to_whisk(preset_config, session_id)
             if whisk_session == "TOKEN_EXPIRED":
+                whisk_pool.release_key(session_id)
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                 return None
 
@@ -2149,6 +2260,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     token_expired = True
 
             if token_expired:
+                whisk_pool.release_key(session_id)
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                 return None
 
@@ -2182,9 +2294,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                 
                 if result == "TOKEN_EXPIRED":
+                    whisk_pool.release_key(session_id)
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                     return None
-                
+
                 if result is not None:
                     image_results[idx] = result
                     retried += 1
@@ -2264,6 +2377,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                         token_expired = True
 
                 if token_expired:
+                    whisk_pool.release_key(session_id)
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                     return None
 
@@ -2411,7 +2525,9 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         with open(os.path.join(work_dir, 'generation_state.json'), 'w') as f:
             json.dump(generation_state, f, indent=2)
 
-        active_sessions.pop(session_id, None)
+        with _active_sessions_lock:
+            active_sessions.pop(session_id, None)
+        whisk_pool.release_key(session_id)
         emit_progress(session_id, 'complete', 100, 'Processing complete!', {
             'video_url': f'/download/{session_id}/{output_filename}',
             'scenes': scenes,
@@ -2445,7 +2561,9 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         
         return output_path
     except Exception as e:
-        active_sessions.pop(session_id, None)
+        with _active_sessions_lock:
+            active_sessions.pop(session_id, None)
+        whisk_pool.release_key(session_id)
         logger.error(f"Pipeline error: {e}", exc_info=True)
         emit_progress(session_id, 'error', 0, f'Error: {str(e)}')
         
@@ -2465,17 +2583,36 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         raise
 
 
+# ===================== ATOMIC FILE OPERATIONS =====================
+def _atomic_json_write(filepath, data):
+    """Write JSON atomically using temp file + rename to prevent corruption."""
+    dir_name = os.path.dirname(filepath)
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, filepath)
+    except Exception as e:
+        logger.error(f"Atomic write failed for {filepath}: {e}")
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+_history_lock = threading.Lock()
+_credits_lock = threading.Lock()
+
+
 # ===================== GENERATION HISTORY =====================
 HISTORY_FILE = os.path.join(PERSISTENT_DIR, 'generation_history.json')
 
 def log_generation(entry):
-    history = load_history()
-    history.insert(0, entry)  # newest first
-    try:
-        with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to log generation: {e}")
+    with _history_lock:
+        history = load_history()
+        history.insert(0, entry)  # newest first
+        _atomic_json_write(HISTORY_FILE, history)
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -2530,22 +2667,19 @@ def load_credits():
     return {'used': 0, 'log': []}
 
 def save_credits(data):
-    try:
-        with open(CREDITS_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save credits: {e}")
+    _atomic_json_write(CREDITS_FILE, data)
 
 def add_credits(amount, description, session_id=''):
-    data = load_credits()
-    data['used'] += amount
-    data['log'].append({
-        'amount': amount,
-        'description': description,
-        'session_id': session_id,
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-    })
-    save_credits(data)
+    with _credits_lock:
+        data = load_credits()
+        data['used'] += amount
+        data['log'].append({
+            'amount': amount,
+            'description': description,
+            'session_id': session_id,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+        save_credits(data)
 
 @app.route('/admin/credits')
 def admin_credits_api():
@@ -2664,7 +2798,7 @@ def regenerate_scene():
     format_config = state.get('format_config')
     if not format_config:
         video_format = state.get('video_format', 'pulse')
-        format_config = BASE_FORMATS.get(video_format, BASE_FORMATS['pulse'])
+        format_config = copy.deepcopy(BASE_FORMATS.get(video_format, BASE_FORMATS['pulse']))
     has_subject = state.get('has_subject', False)
 
     # Find the scene
@@ -2688,6 +2822,7 @@ def regenerate_scene():
     if channel_config:
         whisk_session = upload_preset_images_to_whisk(channel_config, session_id)
         if whisk_session == "TOKEN_EXPIRED":
+            whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired — update in Railway settings'}), 401
 
     scene_has_subject = scene.get('has_subject', False) and has_subject
@@ -2698,8 +2833,10 @@ def regenerate_scene():
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
     if result == "TOKEN_EXPIRED":
+        whisk_pool.release_key(session_id)
         return jsonify({'error': 'Whisk token expired'}), 401
     if not result:
+        whisk_pool.release_key(session_id)
         return jsonify({'error': 'Image generation failed'}), 500
 
     # Rebuild clip for this scene
@@ -2747,6 +2884,7 @@ def regenerate_scene():
     compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
     
     logger.info(f"Scene {scene_num} regenerated and video recomposed")
+    whisk_pool.release_key(session_id)
     return jsonify({
         'success': True,
         'scene_number': scene_num,
@@ -2784,7 +2922,7 @@ def regenerate_batch():
     format_config = state.get('format_config')
     if not format_config:
         video_format = state.get('video_format', 'pulse')
-        format_config = BASE_FORMATS.get(video_format, BASE_FORMATS['pulse'])
+        format_config = copy.deepcopy(BASE_FORMATS.get(video_format, BASE_FORMATS['pulse']))
     has_subject = state.get('has_subject', False)
 
     # Setup Whisk session once for the whole batch
@@ -2793,6 +2931,7 @@ def regenerate_batch():
     if channel_config:
         whisk_session = upload_preset_images_to_whisk(channel_config, session_id)
         if whisk_session == "TOKEN_EXPIRED":
+            whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired'}), 401
 
     results = []
@@ -2819,6 +2958,7 @@ def regenerate_batch():
         result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
         if result == "TOKEN_EXPIRED":
+            whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired', 'completed': results}), 401
         if not result:
             results.append({'scene_number': scene_num, 'success': False, 'error': 'Image gen failed'})
@@ -2864,6 +3004,7 @@ def regenerate_batch():
     
     successful = sum(1 for r in results if r.get('success'))
     logger.info(f"Batch regen complete: {successful}/{len(scene_numbers)} scenes regenerated")
+    whisk_pool.release_key(session_id)
     return jsonify({
         'success': True,
         'results': results,
@@ -2962,6 +3103,11 @@ def update_channel_route(channel_id):
         fields['remove_subject'] = True
     if request.form.get('remove_logo') == 'true':
         fields['remove_logo'] = True
+    if request.form.get('remove_style') == 'true':
+        fields['remove_style'] = True
+    animation_pattern = request.form.get('animation_pattern')
+    if animation_pattern is not None:
+        fields['animation_pattern'] = animation_pattern
     if update_channel(channel_id, **fields):
         return jsonify({'ok': True, 'id': channel_id})
     return jsonify({'error': 'Channel not found'}), 404
@@ -3062,7 +3208,9 @@ def import_channels():
 @app.route('/api/active-generations')
 def get_active_generations():
     """Return count of currently processing generations."""
-    return jsonify({'count': len(active_sessions)})
+    with _active_sessions_lock:
+        count = len(active_sessions)
+    return jsonify({'count': count})
 
 @app.route('/api/recent-generations')
 def recent_generations():
@@ -3117,6 +3265,7 @@ def version():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY), 'gemini': bool(GEMINI_API_KEY),
+                    'assemblyai': bool(ASSEMBLYAI_API_KEY),
                     'whisk_keys': len(whisk_pool), 'whisk_pool': whisk_pool.status()})
 
 if __name__ == '__main__':
