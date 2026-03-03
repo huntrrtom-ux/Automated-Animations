@@ -36,6 +36,7 @@ class WhiskPool:
         self._lock = threading.Lock()
         self._reservations = {}       # session_id -> key_index
         self._reservation_counts = {} # key_index -> count of active reservations
+        self._quota_exhausted = set() # key indices with 0 credits remaining
         self._load_keys()
         logger.info(f"WhiskPool initialized with {len(self.keys)} key(s)")
 
@@ -126,6 +127,28 @@ class WhiskPool:
                 self.keys[index]['cooldown_until'] = time.time() + 300  # 5 min
                 logger.warning(f"Whisk key {index+1}/{len(self.keys)} marked expired (5min cooldown)")
 
+    def mark_quota_exhausted(self, index):
+        """Mark a key as having 0 credits (quota reached). Long cooldown until daily reset."""
+        with self._lock:
+            if 0 <= index < len(self.keys):
+                self._quota_exhausted.add(index)
+                self.keys[index]['cooldown_until'] = time.time() + 3600  # 1 hour
+                exhausted = len(self._quota_exhausted)
+                total = len(self.keys)
+                logger.warning(f"Whisk key {index+1}/{total} has 0 credits (quota exhausted) — {exhausted}/{total} keys exhausted")
+
+    def all_quota_exhausted(self):
+        """Check if ALL keys have exhausted their quota."""
+        with self._lock:
+            if not self.keys:
+                return True
+            return len(self._quota_exhausted) >= len(self.keys)
+
+    def clear_quota(self, index):
+        """Clear quota-exhausted status for a key (e.g. after a successful request)."""
+        with self._lock:
+            self._quota_exhausted.discard(index)
+
     def refresh_key(self, index, token=None, cookie=None):
         """Update a key's credentials (e.g. after token refresh)."""
         with self._lock:
@@ -142,6 +165,7 @@ class WhiskPool:
             old_count = len(self.keys)
             self.keys = []
             self._index = 0
+            self._quota_exhausted.clear()
         self._load_keys()
         logger.info(f"WhiskPool reloaded: {old_count} -> {len(self.keys)} keys")
 
@@ -236,6 +260,8 @@ class WhiskPool:
             'cooling_down': sum(1 for k in self.keys if k['cooldown_until'] > now),
             'active_reservations': dict(self._reservation_counts),
             'reserved_sessions': list(self._reservations.keys()),
+            'quota_exhausted': len(self._quota_exhausted),
+            'all_quota_exhausted': len(self._quota_exhausted) >= len(self.keys) if self.keys else True,
             'keys': [
                 {
                     'index': i,
@@ -243,7 +269,8 @@ class WhiskPool:
                     'has_cookie': bool(k['cookie']),
                     'available': k['cooldown_until'] <= now,
                     'cooldown_remaining': max(0, k['cooldown_until'] - now),
-                    'reservations': self._reservation_counts.get(i, 0)
+                    'reservations': self._reservation_counts.get(i, 0),
+                    'quota_exhausted': i in self._quota_exhausted
                 }
                 for i, k in enumerate(self.keys)
             ]
