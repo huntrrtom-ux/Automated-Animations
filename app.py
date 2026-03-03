@@ -1306,22 +1306,28 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     result['_reupload_lock'] = threading.Lock()
     result['_upload_time'] = time.time()
 
-    # Pass style_text through to generation
+    # Pass style_text through to generation — sanitize once upfront to avoid
+    # per-scene safety retries from copyrighted style descriptions
     style_text = preset_config.get('style_text', '')
+    if style_text:
+        style_text = sanitize_style_text(style_text)
     result['style_text'] = style_text
 
     if preset_config.get('style_base64'):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
         auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
         style_caption = (
-            "Use this image as an art style reference. Match the line work, outlines, color palette, "
-            "shading technique, and rendering aesthetic. Keep the illustrated/stylized look throughout. "
-            "Only reference the visual style from this image, not its content or composition."
+            "ART STYLE REFERENCE ONLY. Extract ONLY the visual rendering style from this image: "
+            "line weight, outline thickness, color palette, shading technique, and rendering aesthetic. "
+            "DO NOT reproduce, copy, or recreate any content, characters, objects, scenes, poses, "
+            "or composition from this reference image. Every generated image must depict a completely "
+            "new scene as described in the prompt — only the artistic rendering style should match."
         )
         if style_text:
-            style_caption += f" User style notes: {style_text}"
-        if auto_caption:
-            style_caption += f" Art style features: {auto_caption[:200]}"
+            style_caption += f" Style notes: {style_text}"
+        # Deliberately omit auto_caption — it describes the IMAGE CONTENT (characters,
+        # objects, setting) which causes Whisk to reproduce the reference image itself.
+        # We only want the style, not the content.
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
@@ -1407,9 +1413,13 @@ def rephrase_prompt(original_prompt):
                 {"role": "system", "content":
                  "You rewrite image generation prompts blocked by safety filters. "
                  "AGGRESSIVELY sanitize while keeping the core visual scene.\n"
-                 "REMOVE: aggressive actions (slamming, smashing, throwing, punching), "
+                 "REMOVE: copyrighted/trademarked references (Family Guy, Simpsons, Disney, Marvel, etc), "
+                 "aggressive actions (slamming, smashing, throwing, punching), "
                  "intense emotions (furious, enraged, devastated, anguished, hysterical), "
-                 "confrontational language (screaming, glaring, threatening), medical/injury references.\n"
+                 "confrontational language (screaming, glaring, threatening), medical/injury references, "
+                 "dollar signs or specific monetary amounts.\n"
+                 "REPLACE copyrighted styles with generic descriptions: 'Family Guy style' → 'bold-outline animated comedy cartoon', "
+                 "'Simpsons style' → 'yellow-skinned cartoon', 'anime style' is fine as-is.\n"
                  "REPLACE WITH calm equivalents: 'slams laptop' → 'closes laptop', "
                  "'furiously types' → 'types quickly', 'screams in anger' → 'takes a deep breath'.\n"
                  "Keep setting, composition, and lighting. Return ONLY the rewritten prompt."},
@@ -1424,6 +1434,48 @@ def rephrase_prompt(original_prompt):
     except Exception as e:
         logger.warning(f"Prompt rephrase failed: {e}")
         return original_prompt
+
+
+def sanitize_style_text(style_text):
+    """One-time sanitization of user style text to remove copyrighted references
+    before any scenes are generated.  This avoids per-scene safety retries."""
+    if not style_text or len(style_text) < 10:
+        return style_text
+    try:
+        if GEMINI_API_KEY:
+            client = openai.OpenAI(api_key=GEMINI_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+            model = "gemini-2.5-flash"
+        else:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            model = "gpt-4o-mini"
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content":
+                 "You rewrite art-style descriptions to remove any copyrighted or trademarked references "
+                 "while preserving the EXACT visual characteristics.\n"
+                 "REPLACE named styles with their visual traits:\n"
+                 "  'Family Guy style' → 'bold thick black outlines, flat solid colors, rounded heads, simplified bodies'\n"
+                 "  'Simpsons style' → 'yellow skin tones, overbite features, bold outlines, flat shading'\n"
+                 "  'Disney style' → 'soft rounded features, expressive eyes, clean line art, warm palette'\n"
+                 "  'South Park style' → 'paper cut-out look, simple geometric shapes, flat colors'\n"
+                 "If the description ALREADY uses only generic visual terms (no brand/show names), "
+                 "return it unchanged.\n"
+                 "Keep ALL visual details: line weight, color palette, shading style, proportions, etc.\n"
+                 "Return ONLY the rewritten style description, nothing else."},
+                {"role": "user", "content": style_text}
+            ],
+            max_tokens=200,
+            temperature=0.2
+        )
+        sanitized = response.choices[0].message.content.strip()
+        if sanitized and sanitized != style_text:
+            logger.info(f"Sanitized style text: '{style_text[:80]}...' → '{sanitized[:80]}...'")
+        return sanitized or style_text
+    except Exception as e:
+        logger.warning(f"Style text sanitization failed: {e}")
+        return style_text
 
 
 # ===================== WHISK IMAGE GENERATION =====================
@@ -1451,8 +1503,15 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} — rephrasing prompt + simplifying captions")
-                # Always rephrase from original to avoid drift (rephrasing a rephrase)
-                current_prompt = rephrase_prompt(prompt)
+                # Include style text in the rephrase so copyrighted names get
+                # converted to generic visual equivalents (e.g. "Family Guy Style" →
+                # "bold-outline animated comedy cartoon") rather than dropped entirely.
+                style_text = whisk_session.get('style_text', '') if whisk_session else ''
+                has_style_image = whisk_session.get('style_media_id') is not None if whisk_session else False
+                if style_text and not has_style_image:
+                    current_prompt = rephrase_prompt(f"{style_text} style. {prompt}")
+                else:
+                    current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
@@ -1531,7 +1590,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
     # Get captions — progressively simplified on safety retries to avoid filter triggers
     subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene')
-    style_caption = whisk_session.get('style_caption', 'Art style reference only — match visual style not content')
+    style_caption = whisk_session.get('style_caption', 'Art style reference only — match rendering style, DO NOT reproduce image content')
 
     if safety_retry >= 1:
         # Strip auto-generated caption text that may contribute to safety filter triggers
@@ -1566,14 +1625,22 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     # Build style instruction — keep it clean and simple like browser UI
     style_text = whisk_session.get('style_text', '')
     has_style_image = whisk_session.get('style_media_id') is not None
-    
+
     # The style and subject are already communicated via recipeMediaInputs captions.
     # userInstruction should just be the scene description, clean and direct.
     if style_text and not has_style_image:
         # Text-only style — include style hint since there's no style image
-        styled_prompt = f"{style_text} style. {prompt}"
+        if safety_retry >= 1:
+            # On retry, the rephrased prompt already contains a sanitized style
+            # description (e.g. "Family Guy Style" → "bold-outline animated comedy cartoon")
+            # so don't re-add the raw copyrighted style text
+            styled_prompt = prompt
+        else:
+            styled_prompt = f"{style_text} style. {prompt}"
+    elif has_style_image:
+        # Style image is the reference — reinforce that we want a NEW scene, not a copy
+        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image). {prompt}"
     else:
-        # Style image handles the style — just send the scene prompt
         styled_prompt = prompt
 
     json_data = {
