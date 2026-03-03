@@ -1306,8 +1306,11 @@ def upload_preset_images_to_whisk(preset_config, session_id):
     result['_reupload_lock'] = threading.Lock()
     result['_upload_time'] = time.time()
 
-    # Pass style_text through to generation
+    # Pass style_text through to generation — sanitize once upfront to avoid
+    # per-scene safety retries from copyrighted style descriptions
     style_text = preset_config.get('style_text', '')
+    if style_text:
+        style_text = sanitize_style_text(style_text)
     result['style_text'] = style_text
 
     if preset_config.get('style_base64'):
@@ -1428,6 +1431,48 @@ def rephrase_prompt(original_prompt):
     except Exception as e:
         logger.warning(f"Prompt rephrase failed: {e}")
         return original_prompt
+
+
+def sanitize_style_text(style_text):
+    """One-time sanitization of user style text to remove copyrighted references
+    before any scenes are generated.  This avoids per-scene safety retries."""
+    if not style_text or len(style_text) < 10:
+        return style_text
+    try:
+        if GEMINI_API_KEY:
+            client = openai.OpenAI(api_key=GEMINI_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+            model = "gemini-2.5-flash"
+        else:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            model = "gpt-4o-mini"
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content":
+                 "You rewrite art-style descriptions to remove any copyrighted or trademarked references "
+                 "while preserving the EXACT visual characteristics.\n"
+                 "REPLACE named styles with their visual traits:\n"
+                 "  'Family Guy style' → 'bold thick black outlines, flat solid colors, rounded heads, simplified bodies'\n"
+                 "  'Simpsons style' → 'yellow skin tones, overbite features, bold outlines, flat shading'\n"
+                 "  'Disney style' → 'soft rounded features, expressive eyes, clean line art, warm palette'\n"
+                 "  'South Park style' → 'paper cut-out look, simple geometric shapes, flat colors'\n"
+                 "If the description ALREADY uses only generic visual terms (no brand/show names), "
+                 "return it unchanged.\n"
+                 "Keep ALL visual details: line weight, color palette, shading style, proportions, etc.\n"
+                 "Return ONLY the rewritten style description, nothing else."},
+                {"role": "user", "content": style_text}
+            ],
+            max_tokens=200,
+            temperature=0.2
+        )
+        sanitized = response.choices[0].message.content.strip()
+        if sanitized and sanitized != style_text:
+            logger.info(f"Sanitized style text: '{style_text[:80]}...' → '{sanitized[:80]}...'")
+        return sanitized or style_text
+    except Exception as e:
+        logger.warning(f"Style text sanitization failed: {e}")
+        return style_text
 
 
 # ===================== WHISK IMAGE GENERATION =====================
