@@ -1794,16 +1794,33 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         logger.info(f"Animate response scene {scene_num}: status={response.status_code} (attempt {attempt+1})")
         if response.status_code == 401:
             whisk_pool.mark_expired(key['index'])
+            # Animation doesn't need account consistency — try another key
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} expired, switching to key {next_key['index']+1}")
+                emit_progress(session_id, 'generation', -1, f'Animation key expired — switching to key {next_key["index"]+1}...', log_type='error')
+                key = next_key
+                headers = whisk_bearer_headers_for(key)
+                continue
             return "TOKEN_EXPIRED"
         if response.status_code == 429:
-            whisk_pool.mark_cooldown(key['index'], seconds=30 * (attempt + 1))
-            # Stay on reserved key to maintain account consistency
-            key = whisk_pool.get_reserved_key(session_id)
-            if key:
-                if key.get('wait_seconds', 0) > 0:
-                    time.sleep(min(key['wait_seconds'], 30))
+            whisk_pool.mark_cooldown(key['index'], seconds=120)
+            # Animation sends rawBytes so it doesn't need account consistency — switch keys
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} rate-limited, switching to key {next_key['index']+1}")
+                emit_progress(session_id, 'generation', -1, f'Animation rate-limited — switching to key {next_key["index"]+1}...', log_type='warn')
+                key = next_key
                 headers = whisk_bearer_headers_for(key)
-            time.sleep(30 * (attempt + 1))
+                time.sleep(5)
+            else:
+                # All keys exhausted — wait on current key's cooldown
+                key = whisk_pool.get_reserved_key(session_id)
+                if key:
+                    if key.get('wait_seconds', 0) > 0:
+                        time.sleep(min(key['wait_seconds'], 30))
+                    headers = whisk_bearer_headers_for(key)
+                time.sleep(30 * (attempt + 1))
             continue
         if response.status_code != 200:
             logger.warning(f"Animate scene {scene_num} HTTP error: {response.status_code} — body: {response.text[:300]}")
@@ -1833,6 +1850,13 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
             logger.warning(f"Poll {i+1} scene {scene_num}: connection error: {e}")
             continue
         if poll_resp.status_code == 401:
+            whisk_pool.mark_expired(key['index'])
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Poll scene {scene_num}: key {key['index']+1} expired, switching to key {next_key['index']+1}")
+                key = next_key
+                headers = whisk_bearer_headers_for(key)
+                continue
             return "TOKEN_EXPIRED"
         if poll_resp.status_code != 200:
             logger.warning(f"Poll {i+1} scene {scene_num}: HTTP {poll_resp.status_code}")
