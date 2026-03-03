@@ -840,7 +840,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { /* ignore poll errors */ }
     }
     pollActiveGenerations();
-    setInterval(pollActiveGenerations, 5000);
+    setInterval(pollActiveGenerations, 60000);
 
     // ===================== INIT =====================
     loadRecentGenerations();
