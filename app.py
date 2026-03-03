@@ -620,34 +620,71 @@ def transcribe_audio_assemblyai(filepath, session_id):
 
     config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True, auto_chapters=True)
     transcriber = aai.Transcriber()
-    emit_progress(session_id, 'transcription', 5, 'Transcribing with AssemblyAI...')
-    transcript = transcriber.transcribe(filepath, config=config)
+    emit_progress(session_id, 'transcription', 5, 'Submitting to AssemblyAI...')
 
-    if transcript.status == aai.TranscriptStatus.error:
-        logger.error(f"AssemblyAI error: {transcript.error}")
-        raise Exception(f"AssemblyAI transcription failed: {transcript.error}")
+    # Use submit() + manual polling with timeout instead of blocking transcribe()
+    transcript = transcriber.submit(filepath, config=config)
+    transcript_id = transcript.id
+    logger.info(f"AssemblyAI job submitted: {transcript_id}")
+
+    poll_headers = {"authorization": ASSEMBLYAI_API_KEY}
+    start = time.time()
+    TIMEOUT = 300  # 5 minutes
+    poll_data = None
+
+    while True:
+        elapsed = int(time.time() - start)
+        if elapsed > TIMEOUT:
+            logger.error(f"AssemblyAI timed out after {TIMEOUT}s (job {transcript_id})")
+            raise Exception(f"AssemblyAI transcription timed out after {TIMEOUT}s")
+
+        time.sleep(5)
+        emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
+                      f'Transcribing with AssemblyAI... ({elapsed}s)')
+
+        try:
+            resp = req.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+                           headers=poll_headers, timeout=30)
+            poll_data = resp.json()
+        except Exception as e:
+            logger.warning(f"AssemblyAI poll error: {e}")
+            continue
+
+        status = poll_data.get('status', '')
+        if status == 'completed':
+            logger.info(f"AssemblyAI completed in {elapsed}s")
+            break
+        elif status == 'error':
+            error_msg = poll_data.get('error', 'Unknown error')
+            logger.error(f"AssemblyAI error: {error_msg}")
+            raise Exception(f"AssemblyAI transcription failed: {error_msg}")
+
+    # Fetch sentences via API
+    resp = req.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}/sentences",
+                   headers=poll_headers, timeout=30)
+    sentences_data = resp.json()
 
     segments = []
-    for sentence in transcript.get_sentences():
-        text = sentence.text.strip()
+    for sentence in sentences_data.get('sentences', []):
+        text = sentence.get('text', '').strip()
         if text:
             segments.append({
-                'start': sentence.start / 1000.0,  # ms to seconds
-                'end': sentence.end / 1000.0,
+                'start': sentence['start'] / 1000.0,  # ms to seconds
+                'end': sentence['end'] / 1000.0,
                 'text': text
             })
 
-    # Extract auto chapters for scene detection hints
+    # Extract auto chapters from transcript data
     chapters = []
-    if transcript.chapters:
-        for ch in transcript.chapters:
-            chapters.append({
-                'start': ch.start / 1000.0,
-                'end': ch.end / 1000.0,
-                'headline': ch.headline,
-                'summary': ch.summary,
-                'gist': ch.gist
-            })
+    for ch in poll_data.get('chapters', []) or []:
+        chapters.append({
+            'start': ch['start'] / 1000.0,
+            'end': ch['end'] / 1000.0,
+            'headline': ch.get('headline', ''),
+            'summary': ch.get('summary', ''),
+            'gist': ch.get('gist', '')
+        })
+    if chapters:
         logger.info(f"AssemblyAI chapters: {len(chapters)} topic boundaries detected")
 
     logger.info(f"AssemblyAI complete: {len(segments)} segments")
@@ -655,7 +692,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
         logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
 
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
-    return {'full_text': transcript.text or '', 'segments': segments, 'chapters': chapters}
+    return {'full_text': poll_data.get('text', ''), 'segments': segments, 'chapters': chapters}
 
 
 # ===================== SCENE DETECTION =====================
@@ -1396,7 +1433,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         current_prompt = prompt
         session_refreshed = False
         for attempt in range(3):
-            result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
+            result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=attempt)
             if result == "TOKEN_EXPIRED":
                 return result
             if result == "SESSION_EXPIRED" and not session_refreshed:
@@ -1404,7 +1441,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 logger.info(f"Session expired at scene {scene_num}, triggering re-upload...")
                 reupload_preset_if_needed(whisk_session, session_id)
                 session_refreshed = True
-                result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
+                result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=attempt)
                 if result == "TOKEN_EXPIRED":
                     return result
                 if result is not None and result != "SESSION_EXPIRED":
@@ -1413,7 +1450,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
             if result is not None and result != "SESSION_EXPIRED":
                 return result
             if attempt < 2:
-                logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} — rephrasing prompt")
+                logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} — rephrasing prompt + simplifying captions")
                 # Always rephrase from original to avoid drift (rephrasing a rephrase)
                 current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
@@ -1469,7 +1506,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
     return None
 
 
-def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject=False):
+def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject=False, safety_retry=0):
     # Use pinned key from whisk_session to stay on the same Google account
     # where subject/style media IDs were uploaded
     pinned_index = whisk_session.get('_pinned_key_index')
@@ -1492,10 +1529,26 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     workflow_id = whisk_session.get('workflow_id', str(uuid.uuid4()))
     session_ts = whisk_session.get('session_ts', f";{int(time.time() * 1000)}")
 
+    # Get captions — progressively simplified on safety retries to avoid filter triggers
+    subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene')
+    style_caption = whisk_session.get('style_caption', 'Art style reference only — match visual style not content')
+
+    if safety_retry >= 1:
+        # Strip auto-generated caption text that may contribute to safety filter triggers
+        for marker in [" Art style features:", " Character identity details:"]:
+            subject_caption = subject_caption.split(marker)[0]
+            style_caption = style_caption.split(marker)[0]
+        logger.info(f"Safety retry {safety_retry}: stripped auto-captions for scene {scene_num}")
+    if safety_retry >= 2:
+        # Minimal captions on final attempt
+        subject_caption = "Character reference"
+        style_caption = "Art style reference"
+        logger.info(f"Safety retry {safety_retry}: using minimal captions for scene {scene_num}")
+
     recipe_inputs = []
     if scene_has_subject and whisk_session.get('subject_media_id'):
         recipe_inputs.append({
-            "caption": whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene'),
+            "caption": subject_caption,
             "mediaInput": {
                 "mediaCategory": "MEDIA_CATEGORY_SUBJECT",
                 "mediaGenerationId": whisk_session['subject_media_id']
@@ -1503,7 +1556,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         })
     if whisk_session.get('style_media_id'):
         recipe_inputs.append({
-            "caption": whisk_session.get('style_caption', 'Art style reference only — match visual style not content'),
+            "caption": style_caption,
             "mediaInput": {
                 "mediaCategory": "MEDIA_CATEGORY_STYLE",
                 "mediaGenerationId": whisk_session['style_media_id']
@@ -1593,7 +1646,9 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
         return "SESSION_EXPIRED"
     if response.status_code == 400:
-        logger.warning(f"Whisk safety/content filter for scene {scene_num}: {response.text[:300]}")
+        logger.warning(f"Whisk UNSAFE_GENERATION for scene {scene_num}: {response.text[:300]}")
+        logger.warning(f"  userInstruction was: {styled_prompt[:200]}")
+        logger.warning(f"  captions: subject={subject_caption[:80]}, style={style_caption[:80]}")
         return None  # Triggers rephrase+retry, does NOT stop the generation
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
@@ -2008,7 +2063,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
         if ASSEMBLYAI_API_KEY:
-            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+            try:
+                transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+            except Exception as e:
+                logger.warning(f"AssemblyAI failed ({e}), falling back to Whisper")
+                emit_progress(session_id, 'transcription', 5, 'AssemblyAI failed — using Whisper...')
+                transcript_data = transcribe_audio(filepath, session_id)
         else:
             transcript_data = transcribe_audio(filepath, session_id)
         scenes = detect_scene_changes(
