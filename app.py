@@ -1346,14 +1346,19 @@ def rephrase_prompt(original_prompt):
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You rephrase image generation prompts that were blocked by safety filters. "
-                 "Rewrite the visual description to convey the same scene but using softer, safer language. "
-                 "Avoid any words related to violence, danger, medical procedures, distress, or anything potentially sensitive. "
-                 "Keep it as a simple visual scene description. Return ONLY the rephrased prompt, nothing else."},
-                {"role": "user", "content": f"This image prompt was blocked by a safety filter. Rephrase it:\n\n{original_prompt}"}
+                {"role": "system", "content":
+                 "You rewrite image generation prompts blocked by safety filters. "
+                 "AGGRESSIVELY sanitize while keeping the core visual scene.\n"
+                 "REMOVE: aggressive actions (slamming, smashing, throwing, punching), "
+                 "intense emotions (furious, enraged, devastated, anguished, hysterical), "
+                 "confrontational language (screaming, glaring, threatening), medical/injury references.\n"
+                 "REPLACE WITH calm equivalents: 'slams laptop' → 'closes laptop', "
+                 "'furiously types' → 'types quickly', 'screams in anger' → 'takes a deep breath'.\n"
+                 "Keep setting, composition, and lighting. Return ONLY the rewritten prompt."},
+                {"role": "user", "content": f"This image prompt was blocked by a safety filter. Rewrite it to be safe:\n\n{original_prompt}"}
             ],
             max_tokens=200,
-            temperature=0.7
+            temperature=0.3
         )
         rephrased = response.choices[0].message.content.strip()
         logger.info(f"Rephrased prompt: '{original_prompt[:60]}...' → '{rephrased[:60]}...'")
@@ -1373,6 +1378,22 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
             result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
             if result == "TOKEN_EXPIRED":
                 return result
+            if result == "UNSAFE_GENERATION":
+                # Track consecutive UNSAFE_GENERATION errors across scenes — likely stale credentials
+                whisk_session.setdefault('_unsafe_count', 0)
+                whisk_session['_unsafe_count'] += 1
+                if whisk_session['_unsafe_count'] >= 3:
+                    logger.error(f"Multiple UNSAFE_GENERATION errors — likely stale credentials")
+                    emit_progress(session_id, 'error', 0,
+                        'Multiple scenes blocked (likely stale Whisk token) — refresh WHISK_API_KEY & WHISK_COOKIE in Railway.')
+                    create_placeholder_image(prompt, output_path)
+                    return "TOKEN_EXPIRED"
+                # First couple hits: try rephrasing in case it is actual content
+                if attempt < 2:
+                    logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} (UNSAFE_GENERATION)")
+                    current_prompt = rephrase_prompt(prompt)
+                    time.sleep(3)
+                continue
             if result == "SESSION_EXPIRED" and not session_refreshed:
                 # Media IDs expired — re-upload preset images and retry with same prompt
                 logger.info(f"Session expired at scene {scene_num}, triggering re-upload...")
@@ -1381,15 +1402,16 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
                 if result == "TOKEN_EXPIRED":
                     return result
-                if result is not None and result != "SESSION_EXPIRED":
+                if result is not None and result not in ("SESSION_EXPIRED", "UNSAFE_GENERATION"):
                     return result
                 # If still failing after re-upload, fall through to rephrase logic
-            if result is not None and result != "SESSION_EXPIRED":
+            if result is not None and result not in ("SESSION_EXPIRED", "UNSAFE_GENERATION"):
+                whisk_session['_unsafe_count'] = 0  # Reset on success
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num}")
-                # Rephrase prompt after failure to avoid hitting same safety filter
-                current_prompt = rephrase_prompt(current_prompt)
+                # Rephrase prompt after failure — always from original to avoid drift
+                current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
@@ -1566,6 +1588,9 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     if response.status_code == 404:
         logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
         return "SESSION_EXPIRED"
+    if response.status_code == 400 and 'UNSAFE_GENERATION' in response.text:
+        logger.warning(f"Safety filter (likely stale token) for scene {scene_num}: {response.text[:200]}")
+        return "UNSAFE_GENERATION"
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
