@@ -1317,14 +1317,17 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
         auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
         style_caption = (
-            "Use this image as an art style reference. Match the line work, outlines, color palette, "
-            "shading technique, and rendering aesthetic. Keep the illustrated/stylized look throughout. "
-            "Only reference the visual style from this image, not its content or composition."
+            "ART STYLE REFERENCE ONLY. Extract ONLY the visual rendering style from this image: "
+            "line weight, outline thickness, color palette, shading technique, and rendering aesthetic. "
+            "DO NOT reproduce, copy, or recreate any content, characters, objects, scenes, poses, "
+            "or composition from this reference image. Every generated image must depict a completely "
+            "new scene as described in the prompt — only the artistic rendering style should match."
         )
         if style_text:
-            style_caption += f" User style notes: {style_text}"
-        if auto_caption:
-            style_caption += f" Art style features: {auto_caption[:200]}"
+            style_caption += f" Style notes: {style_text}"
+        # Deliberately omit auto_caption — it describes the IMAGE CONTENT (characters,
+        # objects, setting) which causes Whisk to reproduce the reference image itself.
+        # We only want the style, not the content.
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
@@ -1587,7 +1590,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
     # Get captions — progressively simplified on safety retries to avoid filter triggers
     subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene')
-    style_caption = whisk_session.get('style_caption', 'Art style reference only — match visual style not content')
+    style_caption = whisk_session.get('style_caption', 'Art style reference only — match rendering style, DO NOT reproduce image content')
 
     if safety_retry >= 1:
         # Strip auto-generated caption text that may contribute to safety filter triggers
@@ -1634,8 +1637,10 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             styled_prompt = prompt
         else:
             styled_prompt = f"{style_text} style. {prompt}"
+    elif has_style_image:
+        # Style image is the reference — reinforce that we want a NEW scene, not a copy
+        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image). {prompt}"
     else:
-        # Style image handles the style — just send the scene prompt
         styled_prompt = prompt
 
     json_data = {
