@@ -1344,12 +1344,15 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 29, 'Captioning subject...')
         auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
         subject_caption = (
-            "Character identity reference. Use this character's face, body type, hair, and clothing as identity reference. "
-            "Draw the character with varied poses, expressions, and gestures to match each scene. "
-            "The character should feel natural and dynamic, not stiff or static."
+            "CHARACTER IDENTITY REFERENCE ONLY. Use this character's face, body type, hair, and clothing "
+            "as identity reference. Draw the character with varied poses, expressions, and gestures to match "
+            "each scene. The character should feel natural and dynamic, not stiff or static. "
+            "DO NOT reproduce the pose, background, setting, or composition from this reference image — "
+            "every scene must be a completely new illustration showing this character in the described scenario."
         )
-        if auto_caption:
-            subject_caption += f" Character identity details: {auto_caption[:200]}"
+        # Deliberately omit auto_caption — it describes the IMAGE CONTENT (pose, background,
+        # setting) which causes Whisk to reproduce the reference image instead of creating
+        # new scenes with the character.
         result['subject_caption'] = subject_caption
 
         emit_progress(session_id, 'generation', 29, 'Uploading subject character...')
@@ -1590,7 +1593,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     session_ts = whisk_session.get('session_ts', f";{int(time.time() * 1000)}")
 
     # Get captions — progressively simplified on safety retries to avoid filter triggers
-    subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene')
+    subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene, DO NOT reproduce the reference image')
     style_caption = whisk_session.get('style_caption', 'Art style reference only — match rendering style, DO NOT reproduce image content')
 
     if safety_retry >= 1:
@@ -1629,6 +1632,8 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
     # The style and subject are already communicated via recipeMediaInputs captions.
     # userInstruction should just be the scene description, clean and direct.
+    has_subject = scene_has_subject and whisk_session.get('subject_media_id')
+
     if style_text and not has_style_image:
         # Text-only style — include style hint since there's no style image
         if safety_retry >= 1:
@@ -1638,6 +1643,8 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             styled_prompt = prompt
         else:
             styled_prompt = f"{style_text} style. {prompt}"
+        if has_subject:
+            styled_prompt = f"Create a unique new scene — DO NOT copy the subject reference image. {styled_prompt}"
     elif has_style_image:
         # Style image is the reference — reinforce that we want a NEW scene, not a copy
         styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image). {prompt}"
