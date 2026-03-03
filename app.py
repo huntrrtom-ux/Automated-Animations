@@ -1277,11 +1277,9 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
         auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
         style_caption = (
-            "ABSOLUTE STYLE LOCK. Every generated image MUST exactly match this art style: "
-            "the line work, outlines, color palette, shading technique, and rendering aesthetic. "
-            "FORBIDDEN styles: photorealistic, realistic, 3D render, CGI, cinematic, lifelike, hyper-realistic, photo. "
-            "If any element looks realistic, make it MORE stylized. "
-            "DO NOT reproduce any objects, characters, or scenes from this image."
+            "Use this image as an art style reference. Match the line work, outlines, color palette, "
+            "shading technique, and rendering aesthetic. Keep the illustrated/stylized look throughout. "
+            "Only reference the visual style from this image, not its content or composition."
         )
         if style_text:
             style_caption += f" User style notes: {style_text}"
@@ -1302,10 +1300,9 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 29, 'Captioning subject...')
         auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
         subject_caption = (
-            "CHARACTER IDENTITY REFERENCE. This character's face, body type, hair, and clothing should be used "
-            "as identity reference ONLY. The character MUST be drawn with different poses, facial expressions, "
-            "gestures, and emotions as needed by each scene. Do NOT keep the character stiff or in the same pose. "
-            "Adapt the character dynamically — they can smile, frown, point, sit, run, gesture, etc."
+            "Character identity reference. Use this character's face, body type, hair, and clothing as identity reference. "
+            "Draw the character with varied poses, expressions, and gestures to match each scene. "
+            "The character should feel natural and dynamic, not stiff or static."
         )
         if auto_caption:
             subject_caption += f" Character identity details: {auto_caption[:200]}"
