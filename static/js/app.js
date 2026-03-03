@@ -64,6 +64,19 @@ document.addEventListener('DOMContentLoaded', () => {
         handleProgress(data);
     });
 
+    socket.on('regen_progress', (data) => {
+        if (data.session_id !== currentSessionId) return;
+        const pct = data.progress;
+        const msg = data.message || '';
+        // Update the spinner modal text
+        const progressMsg = document.getElementById('regen-progress-msg');
+        if (progressMsg && !document.getElementById('regen-progress-overlay').classList.contains('hidden')) {
+            progressMsg.textContent = `${msg} (${pct}%)`;
+        }
+        // Update browser tab title
+        document.title = `(${pct}%) Regenerating \u2014 Hunter Motions`;
+    });
+
     // ===================== WIZARD NAVIGATION =====================
     const panels = {
         home: document.getElementById('step-home'),
@@ -634,6 +647,8 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = true;
         btnText.textContent = `Regenerating ${sceneNums.length} scenes...`;
 
+        showRegenProgress(sceneNums.length);
+
         try {
             const resp = await fetch('/api/regenerate-batch', {
                 method: 'POST',
@@ -641,6 +656,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ session_id: currentSessionId, scene_numbers: sceneNums })
             });
             const result = await resp.json();
+            hideRegenProgress();
             if (result.success) {
                 window._currentScenes = result.scenes;
                 const videoPreview = document.getElementById('video-preview');
@@ -658,6 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('Error: ' + (result.error || 'Batch regeneration failed'), 'error');
             }
         } catch {
+            hideRegenProgress();
             showToast('Network error \u2014 please try again', 'error');
         }
 
@@ -701,8 +718,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         submitBtn.disabled = true;
         submitBtn.querySelector('.btn-text').textContent = 'Regenerating...';
-        status.textContent = 'Generating new image...';
-        status.classList.remove('hidden');
+        status.classList.add('hidden');
+
+        // Close the regen edit modal and show the progress overlay
+        document.getElementById('regen-overlay').classList.add('hidden');
+        showRegenProgress(1);
 
         try {
             const resp = await fetch('/api/regenerate-scene', {
@@ -711,8 +731,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ session_id: currentSessionId, scene_number: sceneNum, custom_prompt: customPrompt })
             });
             const result = await resp.json();
+            hideRegenProgress();
             if (result.success) {
-                status.textContent = 'Scene regenerated! Reloading...';
                 window._currentScenes = result.scenes;
                 const videoPreview = document.getElementById('video-preview');
                 const currentTime = videoPreview.currentTime;
@@ -724,15 +744,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 const descEl = document.querySelector(`.scene-item-interactive[data-scene-num="${sceneNum}"] .scene-desc`);
                 if (descEl) descEl.textContent = customPrompt.substring(0, 120) + (customPrompt.length > 120 ? '...' : '');
                 document.getElementById('regen-current-img').src = result.image_url + '?t=' + Date.now();
-                showToast('Scene regenerated successfully!', 'success');
-                setTimeout(() => document.getElementById('regen-overlay').classList.add('hidden'), 1500);
+                showBatchComplete(1, 1);
             } else {
+                // Re-open the regen edit modal so user can retry
+                document.getElementById('regen-overlay').classList.remove('hidden');
                 status.textContent = 'Error: ' + (result.error || 'Unknown error');
+                status.classList.remove('hidden');
                 submitBtn.disabled = false;
                 submitBtn.querySelector('.btn-text').textContent = 'Retry';
             }
         } catch {
+            hideRegenProgress();
+            document.getElementById('regen-overlay').classList.remove('hidden');
             status.textContent = 'Network error \u2014 please try again';
+            status.classList.remove('hidden');
             submitBtn.disabled = false;
             submitBtn.querySelector('.btn-text').textContent = 'Retry';
         }
@@ -817,6 +842,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('batch-complete-continue').addEventListener('click', () => {
         document.getElementById('batch-complete-overlay').classList.add('hidden');
     });
+
+    function showRegenProgress(count) {
+        document.getElementById('regen-progress-msg').textContent = `Regenerating ${count} scene${count > 1 ? 's' : ''}`;
+        document.getElementById('regen-progress-overlay').classList.remove('hidden');
+    }
+
+    function hideRegenProgress() {
+        document.getElementById('regen-progress-overlay').classList.add('hidden');
+        document.title = 'Hunter Motions';
+    }
 
     function showBatchComplete(completed, total) {
         document.getElementById('batch-complete-msg').textContent = `${completed} of ${total} scene${total > 1 ? 's' : ''} regenerated successfully`;

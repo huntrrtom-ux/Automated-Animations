@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import uuid
@@ -21,7 +22,7 @@ from PIL import Image
 from io import BytesIO
 from gevent.pool import Pool as GeventPool
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -1343,12 +1344,15 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         emit_progress(session_id, 'generation', 29, 'Captioning subject...')
         auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
         subject_caption = (
-            "Character identity reference. Use this character's face, body type, hair, and clothing as identity reference. "
-            "Draw the character with varied poses, expressions, and gestures to match each scene. "
-            "The character should feel natural and dynamic, not stiff or static."
+            "CHARACTER IDENTITY REFERENCE ONLY. Use this character's face, body type, hair, and clothing "
+            "as identity reference. Draw the character with varied poses, expressions, and gestures to match "
+            "each scene. The character should feel natural and dynamic, not stiff or static. "
+            "DO NOT reproduce the pose, background, setting, or composition from this reference image — "
+            "every scene must be a completely new illustration showing this character in the described scenario."
         )
-        if auto_caption:
-            subject_caption += f" Character identity details: {auto_caption[:200]}"
+        # Deliberately omit auto_caption — it describes the IMAGE CONTENT (pose, background,
+        # setting) which causes Whisk to reproduce the reference image instead of creating
+        # new scenes with the character.
         result['subject_caption'] = subject_caption
 
         emit_progress(session_id, 'generation', 29, 'Uploading subject character...')
@@ -1589,7 +1593,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     session_ts = whisk_session.get('session_ts', f";{int(time.time() * 1000)}")
 
     # Get captions — progressively simplified on safety retries to avoid filter triggers
-    subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene')
+    subject_caption = whisk_session.get('subject_caption', 'Character identity reference — adapt pose and expression to scene, DO NOT reproduce the reference image')
     style_caption = whisk_session.get('style_caption', 'Art style reference only — match rendering style, DO NOT reproduce image content')
 
     if safety_retry >= 1:
@@ -1628,6 +1632,8 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
     # The style and subject are already communicated via recipeMediaInputs captions.
     # userInstruction should just be the scene description, clean and direct.
+    has_subject = scene_has_subject and whisk_session.get('subject_media_id')
+
     if style_text and not has_style_image:
         # Text-only style — include style hint since there's no style image
         if safety_retry >= 1:
@@ -1637,6 +1643,8 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             styled_prompt = prompt
         else:
             styled_prompt = f"{style_text} style. {prompt}"
+        if has_subject:
+            styled_prompt = f"Create a unique new scene — DO NOT copy the subject reference image. {styled_prompt}"
     elif has_style_image:
         # Style image is the reference — reinforce that we want a NEW scene, not a copy
         styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image). {prompt}"
@@ -2990,6 +2998,7 @@ def regenerate_scene():
 
     # Regenerate image
     logger.info(f"Regenerating scene {scene_num} for session {session_id}")
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 15, 'message': 'Generating image...'})
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
     if result == "TOKEN_EXPIRED":
@@ -2999,6 +3008,7 @@ def regenerate_scene():
         whisk_pool.release_key(session_id)
         return jsonify({'error': 'Image generation failed'}), 500
 
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 70, 'message': 'Rebuilding clip...'})
     # Rebuild clip for this scene
     is_video = scene.get('is_video', False)
     duration = scene['end_time'] - scene['start_time']
@@ -3039,10 +3049,12 @@ def regenerate_scene():
         json.dump(state, f, indent=2)
     
     # Recompose the full video
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 85, 'message': 'Recomposing video...'})
     logger.info(f"Recomposing video after scene {scene_num} regeneration")
     output_path = os.path.join(work_dir, output_filename)
     compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
-    
+
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 100, 'message': 'Complete'})
     logger.info(f"Scene {scene_num} regenerated and video recomposed")
     whisk_pool.release_key(session_id)
     return jsonify({
@@ -3095,9 +3107,13 @@ def regenerate_batch():
             return jsonify({'error': 'Whisk token expired'}), 401
 
     results = []
+    total = len(scene_numbers)
 
     # Phase 1: Regenerate all images
-    for scene_num in scene_numbers:
+    for si, scene_num in enumerate(scene_numbers):
+        pct = 5 + int(si / total * 80)
+        socketio.emit('regen_progress', {'session_id': session_id, 'progress': pct, 'message': f'Generating scene {si + 1} of {total}...'})
+
         scene_idx = None
         scene = None
         for i, s in enumerate(scenes):
@@ -3158,11 +3174,13 @@ def regenerate_batch():
     with open(state_path, 'w') as f:
         json.dump(state, f, indent=2)
     
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 88, 'message': 'Recomposing video...'})
     logger.info(f"Batch regen: recomposing video after {len(scene_numbers)} scene regenerations")
     output_path = os.path.join(work_dir, output_filename)
     compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
-    
+
     successful = sum(1 for r in results if r.get('success'))
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 100, 'message': 'Complete'})
     logger.info(f"Batch regen complete: {successful}/{len(scene_numbers)} scenes regenerated")
     whisk_pool.release_key(session_id)
     return jsonify({
