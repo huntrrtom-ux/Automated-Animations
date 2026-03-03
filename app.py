@@ -628,7 +628,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
         raise Exception(f"AssemblyAI transcription failed: {transcript.error}")
 
     segments = []
-    for sentence in transcript.sentences:
+    for sentence in transcript.get_sentences():
         text = sentence.text.strip()
         if text:
             segments.append({
