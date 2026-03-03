@@ -1407,9 +1407,13 @@ def rephrase_prompt(original_prompt):
                 {"role": "system", "content":
                  "You rewrite image generation prompts blocked by safety filters. "
                  "AGGRESSIVELY sanitize while keeping the core visual scene.\n"
-                 "REMOVE: aggressive actions (slamming, smashing, throwing, punching), "
+                 "REMOVE: copyrighted/trademarked references (Family Guy, Simpsons, Disney, Marvel, etc), "
+                 "aggressive actions (slamming, smashing, throwing, punching), "
                  "intense emotions (furious, enraged, devastated, anguished, hysterical), "
-                 "confrontational language (screaming, glaring, threatening), medical/injury references.\n"
+                 "confrontational language (screaming, glaring, threatening), medical/injury references, "
+                 "dollar signs or specific monetary amounts.\n"
+                 "REPLACE copyrighted styles with generic descriptions: 'Family Guy style' → 'bold-outline animated comedy cartoon', "
+                 "'Simpsons style' → 'yellow-skinned cartoon', 'anime style' is fine as-is.\n"
                  "REPLACE WITH calm equivalents: 'slams laptop' → 'closes laptop', "
                  "'furiously types' → 'types quickly', 'screams in anger' → 'takes a deep breath'.\n"
                  "Keep setting, composition, and lighting. Return ONLY the rewritten prompt."},
@@ -1566,12 +1570,17 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     # Build style instruction — keep it clean and simple like browser UI
     style_text = whisk_session.get('style_text', '')
     has_style_image = whisk_session.get('style_media_id') is not None
-    
+
     # The style and subject are already communicated via recipeMediaInputs captions.
     # userInstruction should just be the scene description, clean and direct.
     if style_text and not has_style_image:
         # Text-only style — include style hint since there's no style image
-        styled_prompt = f"{style_text} style. {prompt}"
+        # On safety retries, rephrase copyrighted/branded style names to generic equivalents
+        # to avoid triggering safety filters (e.g. "Family Guy Style" → generic cartoon description)
+        if safety_retry >= 1:
+            styled_prompt = prompt  # Drop the style text entirely on retry — it's likely the trigger
+        else:
+            styled_prompt = f"{style_text} style. {prompt}"
     else:
         # Style image handles the style — just send the scene prompt
         styled_prompt = prompt
