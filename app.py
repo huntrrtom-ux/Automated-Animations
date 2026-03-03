@@ -618,7 +618,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
     aai.settings.api_key = ASSEMBLYAI_API_KEY
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
-    config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True)
+    config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True, auto_chapters=True)
     transcriber = aai.Transcriber()
     emit_progress(session_id, 'transcription', 5, 'Transcribing with AssemblyAI...')
     transcript = transcriber.transcribe(filepath, config=config)
@@ -637,12 +637,25 @@ def transcribe_audio_assemblyai(filepath, session_id):
                 'text': text
             })
 
+    # Extract auto chapters for scene detection hints
+    chapters = []
+    if transcript.chapters:
+        for ch in transcript.chapters:
+            chapters.append({
+                'start': ch.start / 1000.0,
+                'end': ch.end / 1000.0,
+                'headline': ch.headline,
+                'summary': ch.summary,
+                'gist': ch.gist
+            })
+        logger.info(f"AssemblyAI chapters: {len(chapters)} topic boundaries detected")
+
     logger.info(f"AssemblyAI complete: {len(segments)} segments")
     if segments:
         logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
 
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
-    return {'full_text': transcript.text or '', 'segments': segments}
+    return {'full_text': transcript.text or '', 'segments': segments, 'chapters': chapters}
 
 
 # ===================== SCENE DETECTION =====================
@@ -768,7 +781,7 @@ def get_format_subject_rules(format_config, has_subject):
             "- When in doubt, set has_subject: true\n"
         )
 
-def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions=''):
+def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions='', chapters=None):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     # Use Gemini via OpenAI-compatible endpoint (cheaper + higher rate limits)
     if GEMINI_API_KEY:
@@ -868,6 +881,17 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
         )
         if is_last_chunk:
             user_msg += f"IMPORTANT: This is the LAST section — you MUST include segment {last_seg_id} in your final scene.\n"
+
+        # Add chapter hints from AssemblyAI if available
+        if chapters:
+            chunk_chapters = [ch for ch in chapters
+                              if ch['end'] > chunk_time_start and ch['start'] < chunk_time_end]
+            if chunk_chapters:
+                user_msg += "\nTOPIC BOUNDARIES (from audio analysis — use these as hints for where to start new scenes):\n"
+                for ch in chunk_chapters:
+                    user_msg += f"  [{ch['start']:.1f}s-{ch['end']:.1f}s] {ch['headline']}\n"
+                user_msg += "These are suggestions — you can split scenes more finely within a topic, but try to align scene breaks with these topic changes.\n"
+
         user_msg += f"\nTranscript:\n\n{segments_text}"
 
         # FIX 2: Higher max_tokens (32000) + FIX 5: Lower temperature (0.4) for consistency
@@ -1378,22 +1402,6 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
             result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
             if result == "TOKEN_EXPIRED":
                 return result
-            if result == "UNSAFE_GENERATION":
-                # Track consecutive UNSAFE_GENERATION errors across scenes — likely stale credentials
-                whisk_session.setdefault('_unsafe_count', 0)
-                whisk_session['_unsafe_count'] += 1
-                if whisk_session['_unsafe_count'] >= 3:
-                    logger.error(f"Multiple UNSAFE_GENERATION errors — likely stale credentials")
-                    emit_progress(session_id, 'error', 0,
-                        'Multiple scenes blocked (likely stale Whisk token) — refresh WHISK_API_KEY & WHISK_COOKIE in Railway.')
-                    create_placeholder_image(prompt, output_path)
-                    return "TOKEN_EXPIRED"
-                # First couple hits: try rephrasing in case it is actual content
-                if attempt < 2:
-                    logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} (UNSAFE_GENERATION)")
-                    current_prompt = rephrase_prompt(prompt)
-                    time.sleep(3)
-                continue
             if result == "SESSION_EXPIRED" and not session_refreshed:
                 # Media IDs expired — re-upload preset images and retry with same prompt
                 logger.info(f"Session expired at scene {scene_num}, triggering re-upload...")
@@ -1402,15 +1410,14 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject)
                 if result == "TOKEN_EXPIRED":
                     return result
-                if result is not None and result not in ("SESSION_EXPIRED", "UNSAFE_GENERATION"):
+                if result is not None and result != "SESSION_EXPIRED":
                     return result
                 # If still failing after re-upload, fall through to rephrase logic
-            if result is not None and result not in ("SESSION_EXPIRED", "UNSAFE_GENERATION"):
-                whisk_session['_unsafe_count'] = 0  # Reset on success
+            if result is not None and result != "SESSION_EXPIRED":
                 return result
             if attempt < 2:
-                logger.warning(f"Retry {attempt+2}/3 for scene {scene_num}")
-                # Rephrase prompt after failure — always from original to avoid drift
+                logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} — rephrasing prompt")
+                # Always rephrase from original to avoid drift (rephrasing a rephrase)
                 current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
@@ -1588,9 +1595,9 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     if response.status_code == 404:
         logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
         return "SESSION_EXPIRED"
-    if response.status_code == 400 and 'UNSAFE_GENERATION' in response.text:
-        logger.warning(f"Safety filter (likely stale token) for scene {scene_num}: {response.text[:200]}")
-        return "UNSAFE_GENERATION"
+    if response.status_code == 400:
+        logger.warning(f"Whisk safety/content filter for scene {scene_num}: {response.text[:300]}")
+        return None  # Triggers rephrase+retry, does NOT stop the generation
     if response.status_code != 200:
         logger.error(f"Whisk recipe error {response.status_code}: {response.text[:500]}")
         return None
@@ -2010,7 +2017,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
-            scene_instructions=channel_config.get('scene_instructions', '') if channel_config else ''
+            scene_instructions=channel_config.get('scene_instructions', '') if channel_config else '',
+            chapters=transcript_data.get('chapters')
         )
 
         with open(os.path.join(work_dir, 'scenes.json'), 'w') as f:
