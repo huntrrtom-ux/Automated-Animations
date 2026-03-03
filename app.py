@@ -1455,8 +1455,15 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 return result
             if attempt < 2:
                 logger.warning(f"Retry {attempt+2}/3 for scene {scene_num} — rephrasing prompt + simplifying captions")
-                # Always rephrase from original to avoid drift (rephrasing a rephrase)
-                current_prompt = rephrase_prompt(prompt)
+                # Include style text in the rephrase so copyrighted names get
+                # converted to generic visual equivalents (e.g. "Family Guy Style" →
+                # "bold-outline animated comedy cartoon") rather than dropped entirely.
+                style_text = whisk_session.get('style_text', '') if whisk_session else ''
+                has_style_image = whisk_session.get('style_media_id') is not None if whisk_session else False
+                if style_text and not has_style_image:
+                    current_prompt = rephrase_prompt(f"{style_text} style. {prompt}")
+                else:
+                    current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
         logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
@@ -1575,10 +1582,11 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
     # userInstruction should just be the scene description, clean and direct.
     if style_text and not has_style_image:
         # Text-only style — include style hint since there's no style image
-        # On safety retries, rephrase copyrighted/branded style names to generic equivalents
-        # to avoid triggering safety filters (e.g. "Family Guy Style" → generic cartoon description)
         if safety_retry >= 1:
-            styled_prompt = prompt  # Drop the style text entirely on retry — it's likely the trigger
+            # On retry, the rephrased prompt already contains a sanitized style
+            # description (e.g. "Family Guy Style" → "bold-outline animated comedy cartoon")
+            # so don't re-add the raw copyrighted style text
+            styled_prompt = prompt
         else:
             styled_prompt = f"{style_text} style. {prompt}"
     else:
