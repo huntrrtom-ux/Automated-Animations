@@ -61,10 +61,12 @@ def allowed_file(filename):
 def allowed_image(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
-def emit_progress(session_id, step, progress, message, data=None):
+def emit_progress(session_id, step, progress, message, data=None, log_type=None):
     payload = {'session_id': session_id, 'step': step, 'progress': progress, 'message': message}
     if data:
         payload['data'] = data
+    if log_type:
+        payload['log_type'] = log_type
     socketio.emit('progress', payload)
     logger.info(f"[{session_id}] {step}: {message} ({progress}%)")
 
@@ -1675,7 +1677,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         if pinned_index is not None:
             # Pinned key: can't switch keys (media IDs are tied to this account)
             # Wait for cooldown then retry with same key
-            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} expired — retrying after cooldown...')
+            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} expired — retrying after cooldown...', log_type='error')
             time.sleep(10)
             key = whisk_pool.get_reserved_key(session_id)
             if key and key.get('wait_seconds', 0) > 0:
@@ -1698,7 +1700,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             if next_key:
                 headers["authorization"] = f"Bearer {next_key['token']}"
                 key = next_key
-                emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...')
+                emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...', log_type='error')
                 try:
                     response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
                                         data=json.dumps(json_data), headers=headers, timeout=120)
@@ -1710,7 +1712,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
                     whisk_pool.mark_expired(key['index'])
                     return "TOKEN_EXPIRED"
             else:
-                emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
+                emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...', log_type='error')
                 time.sleep(60)
                 whisk_pool.reload_from_env()
                 return "TOKEN_EXPIRED"
@@ -2446,12 +2448,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         failed_indices = [i for i, r in enumerate(image_results) if r is None]
         if failed_indices:
             logger.info(f"=== PHASE 1B: Retrying {len(failed_indices)} failed scenes (1 at a time) ===")
-            emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...')
+            emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...', log_type='warn')
             time.sleep(5)  # Wait before retrying
 
             retried = 0
             for retry_num, idx in enumerate(failed_indices, 1):
-                emit_progress(session_id, 'generation', 56, f'Retrying {retry_num}/{len(failed_indices)} images...')
+                emit_progress(session_id, 'generation', 56, f'Retrying {retry_num}/{len(failed_indices)} images...', log_type='warn')
                 scene = scenes[idx]
                 scene_num = scene['scene_number']
                 scene_has_subject = scene.get('has_subject', False) and has_subject

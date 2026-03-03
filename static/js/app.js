@@ -465,9 +465,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ===================== PROGRESS HANDLER =====================
     function handleProgress(data) {
-        const { step, progress, message } = data;
+        const { step, progress, message, log_type } = data;
         const statusMessage = document.getElementById('status-message');
         statusMessage.textContent = message;
+
+        // Color by message type — red for errors, orange for warnings, default for normal
+        if (step === 'error' || log_type === 'error') {
+            statusMessage.style.color = 'var(--error)';
+        } else if (log_type === 'warn') {
+            statusMessage.style.color = 'var(--warn)';
+        } else {
+            statusMessage.style.color = '';
+        }
 
         if (progress >= 0) {
             document.getElementById('progress-bar').style.width = `${progress}%`;
@@ -532,7 +541,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (step === 'error') {
             isGenerating = false;
             document.title = 'Hunter Motions';
-            statusMessage.style.color = 'var(--error)';
         }
     }
 
