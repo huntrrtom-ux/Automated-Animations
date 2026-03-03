@@ -61,10 +61,12 @@ def allowed_file(filename):
 def allowed_image(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
-def emit_progress(session_id, step, progress, message, data=None):
+def emit_progress(session_id, step, progress, message, data=None, log_type=None):
     payload = {'session_id': session_id, 'step': step, 'progress': progress, 'message': message}
     if data:
         payload['data'] = data
+    if log_type:
+        payload['log_type'] = log_type
     socketio.emit('progress', payload)
     logger.info(f"[{session_id}] {step}: {message} ({progress}%)")
 
@@ -1490,7 +1492,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         session_refreshed = False
         for attempt in range(3):
             result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=attempt)
-            if result == "TOKEN_EXPIRED":
+            if result in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
                 return result
             if result == "SESSION_EXPIRED" and not session_refreshed:
                 # Media IDs expired — re-upload preset images and retry with same prompt
@@ -1498,7 +1500,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 reupload_preset_if_needed(whisk_session, session_id)
                 session_refreshed = True
                 result = generate_image_with_recipe(current_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=attempt)
-                if result == "TOKEN_EXPIRED":
+                if result in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
                     return result
                 if result is not None and result != "SESSION_EXPIRED":
                     return result
@@ -1675,7 +1677,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         if pinned_index is not None:
             # Pinned key: can't switch keys (media IDs are tied to this account)
             # Wait for cooldown then retry with same key
-            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} expired — retrying after cooldown...')
+            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} expired — retrying after cooldown...', log_type='error')
             time.sleep(10)
             key = whisk_pool.get_reserved_key(session_id)
             if key and key.get('wait_seconds', 0) > 0:
@@ -1698,7 +1700,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             if next_key:
                 headers["authorization"] = f"Bearer {next_key['token']}"
                 key = next_key
-                emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...')
+                emit_progress(session_id, 'generation', -1, f'Token expired — switching to key {key["index"]+1}...', log_type='error')
                 try:
                     response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe",
                                         data=json.dumps(json_data), headers=headers, timeout=120)
@@ -1710,13 +1712,23 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
                     whisk_pool.mark_expired(key['index'])
                     return "TOKEN_EXPIRED"
             else:
-                emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...')
+                emit_progress(session_id, 'generation', -1, f'Token expired — update in Railway. Retrying in 60s...', log_type='error')
                 time.sleep(60)
                 whisk_pool.reload_from_env()
                 return "TOKEN_EXPIRED"
     if response.status_code == 429:
-        logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
-        whisk_pool.mark_cooldown(key['index'], seconds=60)
+        is_quota = 'QUOTA_REACHED' in (response.text or '')
+        if is_quota:
+            logger.warning(f"QUOTA EXHAUSTED at scene {scene_num} (key {key['index']+1}) — 0 credits remaining")
+            whisk_pool.mark_quota_exhausted(key['index'])
+            if whisk_pool.all_quota_exhausted():
+                logger.error(f"ALL {len(whisk_pool)} Whisk accounts have 0 credits — stopping generation")
+                emit_progress(session_id, 'error', 0, 'All Whisk accounts have 0 credits — generation stopped.', log_type='error')
+                return "QUOTA_EXHAUSTED"
+            emit_progress(session_id, 'generation', -1, f'Key {key["index"]+1} has 0 credits — other keys still available', log_type='warn')
+        else:
+            logger.warning(f"Rate limited at scene {scene_num} (key {key['index']+1})")
+            whisk_pool.mark_cooldown(key['index'], seconds=60)
     if response.status_code == 404:
         logger.warning(f"Whisk session expired for scene {scene_num} (404 NOT_FOUND — media IDs stale)")
         return "SESSION_EXPIRED"
@@ -1754,6 +1766,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             f.write(base64.b64decode(encoded_image))
         enforce_resolution(output_path)
         logger.info(f"Whisk recipe generated image for scene {scene_num}")
+        whisk_pool.clear_quota(key['index'])  # Successful — clear any quota flag
         return {"media_id": media_id, "prompt": img_prompt, "encoded_image": encoded_image, "workflow_id": workflow_id}
 
     logger.warning(f"No image in recipe response for scene {scene_num}")
@@ -1792,16 +1805,42 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         logger.info(f"Animate response scene {scene_num}: status={response.status_code} (attempt {attempt+1})")
         if response.status_code == 401:
             whisk_pool.mark_expired(key['index'])
+            # Animation doesn't need account consistency — try another key
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} expired, switching to key {next_key['index']+1}")
+                emit_progress(session_id, 'generation', -1, f'Animation key expired — switching to key {next_key["index"]+1}...', log_type='error')
+                key = next_key
+                headers = whisk_bearer_headers_for(key)
+                continue
             return "TOKEN_EXPIRED"
         if response.status_code == 429:
-            whisk_pool.mark_cooldown(key['index'], seconds=30 * (attempt + 1))
-            # Stay on reserved key to maintain account consistency
-            key = whisk_pool.get_reserved_key(session_id)
-            if key:
-                if key.get('wait_seconds', 0) > 0:
-                    time.sleep(min(key['wait_seconds'], 30))
+            is_quota = 'QUOTA_REACHED' in (response.text or '')
+            if is_quota:
+                logger.warning(f"QUOTA EXHAUSTED during animation scene {scene_num} (key {key['index']+1}) — 0 credits")
+                whisk_pool.mark_quota_exhausted(key['index'])
+                if whisk_pool.all_quota_exhausted():
+                    logger.error(f"ALL {len(whisk_pool)} Whisk accounts have 0 credits — stopping")
+                    emit_progress(session_id, 'error', 0, 'All Whisk accounts have 0 credits — generation stopped.', log_type='error')
+                    return "QUOTA_EXHAUSTED"
+            else:
+                whisk_pool.mark_cooldown(key['index'], seconds=120)
+            # Animation sends rawBytes so it doesn't need account consistency — switch keys
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} {'quota exhausted' if is_quota else 'rate-limited'}, switching to key {next_key['index']+1}")
+                emit_progress(session_id, 'generation', -1, f'Animation key {key["index"]+1} {"has 0 credits" if is_quota else "rate-limited"} — switching to key {next_key["index"]+1}...', log_type='warn')
+                key = next_key
                 headers = whisk_bearer_headers_for(key)
-            time.sleep(30 * (attempt + 1))
+                time.sleep(5)
+            else:
+                # All keys busy — wait on current key's cooldown
+                key = whisk_pool.get_reserved_key(session_id)
+                if key:
+                    if key.get('wait_seconds', 0) > 0:
+                        time.sleep(min(key['wait_seconds'], 30))
+                    headers = whisk_bearer_headers_for(key)
+                time.sleep(30 * (attempt + 1))
             continue
         if response.status_code != 200:
             logger.warning(f"Animate scene {scene_num} HTTP error: {response.status_code} — body: {response.text[:300]}")
@@ -1831,6 +1870,13 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
             logger.warning(f"Poll {i+1} scene {scene_num}: connection error: {e}")
             continue
         if poll_resp.status_code == 401:
+            whisk_pool.mark_expired(key['index'])
+            next_key = get_whisk_key()
+            if next_key and next_key['index'] != key['index']:
+                logger.info(f"Poll scene {scene_num}: key {key['index']+1} expired, switching to key {next_key['index']+1}")
+                key = next_key
+                headers = whisk_bearer_headers_for(key)
+                continue
             return "TOKEN_EXPIRED"
         if poll_resp.status_code != 200:
             logger.warning(f"Poll {i+1} scene {scene_num}: HTTP {poll_resp.status_code}")
@@ -2371,6 +2417,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 whisk_pool.release_key(session_id)
                 emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
                 return None
+            if whisk_session == "QUOTA_EXHAUSTED":
+                whisk_pool.release_key(session_id)
+                emit_progress(session_id, 'error', 0, 'All Whisk accounts have 0 credits — generation stopped.')
+                return None
 
         # Generate visuals
         scene_videos = []
@@ -2420,16 +2470,18 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             pool = GeventPool(size=IMAGE_BATCH_SIZE)
             batch_results = pool.map(generate_single_image, batch_indices)
 
-            token_expired = False
+            fatal_error = None
             for idx, result in batch_results:
                 image_results[idx] = result
                 images_generated += 1
                 if result == "TOKEN_EXPIRED":
-                    token_expired = True
+                    fatal_error = 'Token expired — update in Railway settings.'
+                elif result == "QUOTA_EXHAUSTED":
+                    fatal_error = 'All Whisk accounts have 0 credits — generation stopped.'
 
-            if token_expired:
+            if fatal_error:
                 whisk_pool.release_key(session_id)
-                emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                emit_progress(session_id, 'error', 0, fatal_error)
                 return None
 
             progress = 30 + (25 * images_generated / total)
@@ -2446,12 +2498,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         failed_indices = [i for i, r in enumerate(image_results) if r is None]
         if failed_indices:
             logger.info(f"=== PHASE 1B: Retrying {len(failed_indices)} failed scenes (1 at a time) ===")
-            emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...')
+            emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...', log_type='warn')
             time.sleep(5)  # Wait before retrying
 
             retried = 0
             for retry_num, idx in enumerate(failed_indices, 1):
-                emit_progress(session_id, 'generation', 56, f'Retrying {retry_num}/{len(failed_indices)} images...')
+                emit_progress(session_id, 'generation', 56, f'Retrying {retry_num}/{len(failed_indices)} images...', log_type='warn')
                 scene = scenes[idx]
                 scene_num = scene['scene_number']
                 scene_has_subject = scene.get('has_subject', False) and has_subject
@@ -2464,6 +2516,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 if result == "TOKEN_EXPIRED":
                     whisk_pool.release_key(session_id)
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                    return None
+                if result == "QUOTA_EXHAUSTED":
+                    whisk_pool.release_key(session_id)
+                    emit_progress(session_id, 'error', 0, 'All Whisk accounts have 0 credits — generation stopped.')
                     return None
 
                 if result is not None:
@@ -2506,8 +2562,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 except Exception as e:
                     logger.error(f"Animation error scene {scene_num} (attempt {anim_attempt+1}/{max_anim_retries}): {e}")
                     animated = False
-                if animated == "TOKEN_EXPIRED":
-                    return idx, "TOKEN_EXPIRED", None
+                if animated in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
+                    return idx, animated, None
                 if animated:
                     break
                 logger.warning(f"Animation attempt {anim_attempt+1}/{max_anim_retries} FAILED for scene {scene_num}")
@@ -2519,8 +2575,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     scene_has_subject = scene.get('has_subject', False) and has_subject
                     img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
                     new_image = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
-                    if new_image == "TOKEN_EXPIRED":
-                        return idx, "TOKEN_EXPIRED", None
+                    if new_image in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
+                        return idx, new_image, None
                     if new_image and isinstance(new_image, dict):
                         image_results[idx] = new_image
 
@@ -2537,16 +2593,18 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                 pool = GeventPool(size=ANIM_BATCH_SIZE)
                 batch_results = pool.map(animate_single_scene, batch_indices)
 
-                token_expired = False
+                fatal_error = None
                 for idx, animated, video_path in batch_results:
                     anim_results[idx] = (animated, video_path)
                     anims_completed += 1
                     if animated == "TOKEN_EXPIRED":
-                        token_expired = True
+                        fatal_error = 'Token expired — update in Railway settings.'
+                    elif animated == "QUOTA_EXHAUSTED":
+                        fatal_error = 'All Whisk accounts have 0 credits — generation stopped.'
 
-                if token_expired:
+                if fatal_error:
                     whisk_pool.release_key(session_id)
-                    emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
+                    emit_progress(session_id, 'error', 0, fatal_error)
                     return None
 
                 progress = 60 + (25 * anims_completed / total_anims)
@@ -2992,6 +3050,9 @@ def regenerate_scene():
         if whisk_session == "TOKEN_EXPIRED":
             whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired — update in Railway settings'}), 401
+        if whisk_session == "QUOTA_EXHAUSTED":
+            whisk_pool.release_key(session_id)
+            return jsonify({'error': 'All Whisk accounts have 0 credits'}), 429
 
     scene_has_subject = scene.get('has_subject', False) and has_subject
     img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
@@ -3004,6 +3065,9 @@ def regenerate_scene():
     if result == "TOKEN_EXPIRED":
         whisk_pool.release_key(session_id)
         return jsonify({'error': 'Whisk token expired'}), 401
+    if result == "QUOTA_EXHAUSTED":
+        whisk_pool.release_key(session_id)
+        return jsonify({'error': 'All Whisk accounts have 0 credits'}), 429
     if not result:
         whisk_pool.release_key(session_id)
         return jsonify({'error': 'Image generation failed'}), 500
@@ -3105,6 +3169,9 @@ def regenerate_batch():
         if whisk_session == "TOKEN_EXPIRED":
             whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired'}), 401
+        if whisk_session == "QUOTA_EXHAUSTED":
+            whisk_pool.release_key(session_id)
+            return jsonify({'error': 'All Whisk accounts have 0 credits'}), 429
 
     results = []
     total = len(scene_numbers)
@@ -3136,6 +3203,9 @@ def regenerate_batch():
         if result == "TOKEN_EXPIRED":
             whisk_pool.release_key(session_id)
             return jsonify({'error': 'Whisk token expired', 'completed': results}), 401
+        if result == "QUOTA_EXHAUSTED":
+            whisk_pool.release_key(session_id)
+            return jsonify({'error': 'All Whisk accounts have 0 credits', 'completed': results}), 429
         if not result:
             results.append({'scene_number': scene_num, 'success': False, 'error': 'Image gen failed'})
             continue
