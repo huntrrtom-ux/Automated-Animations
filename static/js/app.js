@@ -64,6 +64,19 @@ document.addEventListener('DOMContentLoaded', () => {
         handleProgress(data);
     });
 
+    socket.on('regen_progress', (data) => {
+        if (data.session_id !== currentSessionId) return;
+        const pct = data.progress;
+        const msg = data.message || '';
+        // Update the spinner modal text
+        const progressMsg = document.getElementById('regen-progress-msg');
+        if (progressMsg && !document.getElementById('regen-progress-overlay').classList.contains('hidden')) {
+            progressMsg.textContent = `${msg} (${pct}%)`;
+        }
+        // Update browser tab title
+        document.title = `(${pct}%) Regenerating \u2014 Hunter Motions`;
+    });
+
     // ===================== WIZARD NAVIGATION =====================
     const panels = {
         home: document.getElementById('step-home'),
@@ -837,6 +850,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function hideRegenProgress() {
         document.getElementById('regen-progress-overlay').classList.add('hidden');
+        document.title = 'Hunter Motions';
     }
 
     function showBatchComplete(completed, total) {

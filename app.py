@@ -2998,6 +2998,7 @@ def regenerate_scene():
 
     # Regenerate image
     logger.info(f"Regenerating scene {scene_num} for session {session_id}")
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 15, 'message': 'Generating image...'})
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
     if result == "TOKEN_EXPIRED":
@@ -3007,6 +3008,7 @@ def regenerate_scene():
         whisk_pool.release_key(session_id)
         return jsonify({'error': 'Image generation failed'}), 500
 
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 70, 'message': 'Rebuilding clip...'})
     # Rebuild clip for this scene
     is_video = scene.get('is_video', False)
     duration = scene['end_time'] - scene['start_time']
@@ -3047,10 +3049,12 @@ def regenerate_scene():
         json.dump(state, f, indent=2)
     
     # Recompose the full video
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 85, 'message': 'Recomposing video...'})
     logger.info(f"Recomposing video after scene {scene_num} regeneration")
     output_path = os.path.join(work_dir, output_filename)
     compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
-    
+
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 100, 'message': 'Complete'})
     logger.info(f"Scene {scene_num} regenerated and video recomposed")
     whisk_pool.release_key(session_id)
     return jsonify({
@@ -3103,9 +3107,13 @@ def regenerate_batch():
             return jsonify({'error': 'Whisk token expired'}), 401
 
     results = []
+    total = len(scene_numbers)
 
     # Phase 1: Regenerate all images
-    for scene_num in scene_numbers:
+    for si, scene_num in enumerate(scene_numbers):
+        pct = 5 + int(si / total * 80)
+        socketio.emit('regen_progress', {'session_id': session_id, 'progress': pct, 'message': f'Generating scene {si + 1} of {total}...'})
+
         scene_idx = None
         scene = None
         for i, s in enumerate(scenes):
@@ -3166,11 +3174,13 @@ def regenerate_batch():
     with open(state_path, 'w') as f:
         json.dump(state, f, indent=2)
     
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 88, 'message': 'Recomposing video...'})
     logger.info(f"Batch regen: recomposing video after {len(scene_numbers)} scene regenerations")
     output_path = os.path.join(work_dir, output_filename)
     compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=audio_duration)
-    
+
     successful = sum(1 for r in results if r.get('success'))
+    socketio.emit('regen_progress', {'session_id': session_id, 'progress': 100, 'message': 'Complete'})
     logger.info(f"Batch regen complete: {successful}/{len(scene_numbers)} scenes regenerated")
     whisk_pool.release_key(session_id)
     return jsonify({
