@@ -1775,25 +1775,35 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
 # ===================== ANIMATION =====================
 def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
-    # Use reserved key if available for consistency with upload account
+    # Try reserved key first, but if it's cooling down (quota exhausted / rate limited),
+    # immediately switch to a different key — animation uses rawBytes so any key works
     key = whisk_pool.get_reserved_key(session_id)
     if not key:
         return False
+    original_key_index = key['index']
     if key.get('wait_seconds', 0) > 0:
-        time.sleep(min(key['wait_seconds'], 30))
+        alt_key = get_whisk_key()
+        if alt_key and alt_key['index'] != key['index']:
+            logger.info(f"Animate scene {scene_num}: reserved key {key['index']+1} cooling down, using key {alt_key['index']+1} instead")
+            key = alt_key
+        else:
+            time.sleep(min(key['wait_seconds'], 30))
     headers = whisk_bearer_headers_for(key)
     session_ts = f";{int(time.time() * 1000)}"
     raw_bytes = image_info.get("encoded_image", "")
     if raw_bytes and "," in raw_bytes[:100]:
         raw_bytes = raw_bytes.split(",", 1)[1]
+    # Only include media_id if on the original account that uploaded it —
+    # other accounts would get 404 since media IDs are account-specific
+    media_id = image_info.get("media_id", "") if key['index'] == original_key_index else ""
     animate_data = {
         "clientContext": {"sessionId": session_ts, "tool": "BACKBONE", "workflowId": image_info.get("workflow_id", str(uuid.uuid4()))},
         "loopVideo": False, "modelKey": "", "modelNameType": "VEO_3_1_I2V_12STEP",
-        "promptImageInput": {"mediaGenerationId": image_info.get("media_id", ""),
+        "promptImageInput": {"mediaGenerationId": media_id,
                              "prompt": f"ORIGINAL IMAGE DESCRIPTION:\n{image_info.get('prompt', script)}", "rawBytes": raw_bytes},
         "userInstructions": ""
     }
-    logger.info(f"Whisk Animate starting for scene {scene_num} (media_id={image_info.get('media_id', 'none')}, has_raw_bytes={bool(raw_bytes)})")
+    logger.info(f"Whisk Animate starting for scene {scene_num} (media_id={'yes' if media_id else 'skipped(diff key)'}, key={key['index']+1}/{len(whisk_pool)}, has_raw_bytes={bool(raw_bytes)})")
     response = None
     for attempt in range(5):
         try:
@@ -1812,8 +1822,18 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 emit_progress(session_id, 'generation', -1, f'Animation key expired — switching to key {next_key["index"]+1}...', log_type='error')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
+                # Clear media ID — it belongs to the old account
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
                 continue
             return "TOKEN_EXPIRED"
+        if response.status_code == 404:
+            # Media ID not found on this account — clear it and retry with rawBytes only
+            if animate_data["promptImageInput"].get("mediaGenerationId"):
+                logger.info(f"Animate scene {scene_num}: 404 — clearing media ID and retrying with rawBytes only")
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
+                continue
+            logger.warning(f"Animate scene {scene_num} HTTP 404 even without media ID — body: {response.text[:300]}")
+            break
         if response.status_code == 429:
             is_quota = 'QUOTA_REACHED' in (response.text or '')
             if is_quota:
@@ -1832,6 +1852,8 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 emit_progress(session_id, 'generation', -1, f'Animation key {key["index"]+1} {"has 0 credits" if is_quota else "rate-limited"} — switching to key {next_key["index"]+1}...', log_type='warn')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
+                # Clear media ID — it belongs to the old account
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
                 time.sleep(5)
             else:
                 # All keys busy — wait on current key's cooldown
