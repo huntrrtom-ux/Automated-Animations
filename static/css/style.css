@@ -310,6 +310,10 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .modal-body { margin-bottom: 1.25rem; }
 .modal-dismiss { width: 100%; justify-content: center; }
 
+/* Regenerating spinner */
+.regen-spinner { width: 40px; height: 40px; margin: 0 auto; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: regen-spin 0.8s linear infinite; }
+@keyframes regen-spin { to { transform: rotate(360deg); } }
+
 /* Changelog */
 .changelog-version { font-family: var(--font-display); font-weight: 700; color: var(--accent); font-size: 0.9rem; }
 .changelog-list { margin: 0.5rem 0 0; padding-left: 1.2rem; }
