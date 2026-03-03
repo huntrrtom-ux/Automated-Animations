@@ -1812,8 +1812,18 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 emit_progress(session_id, 'generation', -1, f'Animation key expired — switching to key {next_key["index"]+1}...', log_type='error')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
+                # Clear media ID — it belongs to the old account
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
                 continue
             return "TOKEN_EXPIRED"
+        if response.status_code == 404:
+            # Media ID not found on this account — clear it and retry with rawBytes only
+            if animate_data["promptImageInput"].get("mediaGenerationId"):
+                logger.info(f"Animate scene {scene_num}: 404 — clearing media ID and retrying with rawBytes only")
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
+                continue
+            logger.warning(f"Animate scene {scene_num} HTTP 404 even without media ID — body: {response.text[:300]}")
+            break
         if response.status_code == 429:
             is_quota = 'QUOTA_REACHED' in (response.text or '')
             if is_quota:
@@ -1832,6 +1842,8 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 emit_progress(session_id, 'generation', -1, f'Animation key {key["index"]+1} {"has 0 credits" if is_quota else "rate-limited"} — switching to key {next_key["index"]+1}...', log_type='warn')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
+                # Clear media ID — it belongs to the old account
+                animate_data["promptImageInput"]["mediaGenerationId"] = ""
                 time.sleep(5)
             else:
                 # All keys busy — wait on current key's cooldown
