@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import uuid
@@ -21,7 +22,7 @@ from PIL import Image
 from io import BytesIO
 from gevent.pool import Pool as GeventPool
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
