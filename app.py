@@ -618,7 +618,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
     aai.settings.api_key = ASSEMBLYAI_API_KEY
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
-    config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True)
+    config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True, auto_chapters=True)
     transcriber = aai.Transcriber()
     emit_progress(session_id, 'transcription', 5, 'Transcribing with AssemblyAI...')
     transcript = transcriber.transcribe(filepath, config=config)
@@ -637,12 +637,25 @@ def transcribe_audio_assemblyai(filepath, session_id):
                 'text': text
             })
 
+    # Extract auto chapters for scene detection hints
+    chapters = []
+    if transcript.chapters:
+        for ch in transcript.chapters:
+            chapters.append({
+                'start': ch.start / 1000.0,
+                'end': ch.end / 1000.0,
+                'headline': ch.headline,
+                'summary': ch.summary,
+                'gist': ch.gist
+            })
+        logger.info(f"AssemblyAI chapters: {len(chapters)} topic boundaries detected")
+
     logger.info(f"AssemblyAI complete: {len(segments)} segments")
     if segments:
         logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
 
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
-    return {'full_text': transcript.text or '', 'segments': segments}
+    return {'full_text': transcript.text or '', 'segments': segments, 'chapters': chapters}
 
 
 # ===================== SCENE DETECTION =====================
@@ -768,7 +781,7 @@ def get_format_subject_rules(format_config, has_subject):
             "- When in doubt, set has_subject: true\n"
         )
 
-def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions=''):
+def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions='', chapters=None):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     # Use Gemini via OpenAI-compatible endpoint (cheaper + higher rate limits)
     if GEMINI_API_KEY:
@@ -868,6 +881,17 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
         )
         if is_last_chunk:
             user_msg += f"IMPORTANT: This is the LAST section — you MUST include segment {last_seg_id} in your final scene.\n"
+
+        # Add chapter hints from AssemblyAI if available
+        if chapters:
+            chunk_chapters = [ch for ch in chapters
+                              if ch['end'] > chunk_time_start and ch['start'] < chunk_time_end]
+            if chunk_chapters:
+                user_msg += "\nTOPIC BOUNDARIES (from audio analysis — use these as hints for where to start new scenes):\n"
+                for ch in chunk_chapters:
+                    user_msg += f"  [{ch['start']:.1f}s-{ch['end']:.1f}s] {ch['headline']}\n"
+                user_msg += "These are suggestions — you can split scenes more finely within a topic, but try to align scene breaks with these topic changes.\n"
+
         user_msg += f"\nTranscript:\n\n{segments_text}"
 
         # FIX 2: Higher max_tokens (32000) + FIX 5: Lower temperature (0.4) for consistency
@@ -1993,7 +2017,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
-            scene_instructions=channel_config.get('scene_instructions', '') if channel_config else ''
+            scene_instructions=channel_config.get('scene_instructions', '') if channel_config else '',
+            chapters=transcript_data.get('chapters')
         )
 
         with open(os.path.join(work_dir, 'scenes.json'), 'w') as f:
