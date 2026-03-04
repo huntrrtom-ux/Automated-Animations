@@ -580,6 +580,49 @@ def migrate_pregnancy_explainer_channel():
 migrate_pregnancy_explainer_channel()
 
 
+def migrate_pregnancy_explainer_safety():
+    """One-time migration: add content safety image_instructions to Pregnancy Explainer."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_pregnancy_safety.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== PREGNANCY EXPLAINER SAFETY MIGRATION ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            if cfg.get('name') != 'Pregnancy Explainer':
+                continue
+
+            cfg['image_instructions'] = (
+                "Family-friendly medical education illustration. "
+                "All characters must be fully clothed and modest at all times. "
+                "No nudity, no exposed bodies, no genitals, no revealing clothing, "
+                "no graphic medical imagery, no anatomical diagrams, no surgical scenes. "
+                "Use tasteful, non-explicit, symbolic visuals appropriate for all audiences "
+                "and all environments including workplaces and classrooms."
+            )
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(config_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            logger.info(f"  Updated '{cfg['name']}' ({name}) with content safety image_instructions")
+        except Exception as e:
+            logger.error(f"  Failed to update {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== PREGNANCY EXPLAINER SAFETY MIGRATION COMPLETE ===")
+
+migrate_pregnancy_explainer_safety()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
@@ -974,10 +1017,22 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
             '"has_subject": true, "is_video": false}]}\n\n'
             f"{format_rules}"
         )
-        # Topic title card detection instructions (Pregnancy Explainer channel)
+        # Topic title card detection + content safety (Pregnancy Explainer channel)
         if format_config.get('topic_title_cards', False):
             system_prompt += (
-                "\n\nTOPIC DETECTION (CRITICAL):\n"
+                "\n\nCONTENT SAFETY (pregnancy/medical education — MANDATORY):\n"
+                "All visual descriptions MUST be appropriate for ALL audiences in ALL environments.\n"
+                "- NEVER describe nudity, exposed bodies, bare skin, or intimate anatomy in any visual\n"
+                "- NEVER describe graphic medical procedures, surgery, blood, or internal anatomy diagrams\n"
+                "- NEVER describe genitals, breasts, or any revealing imagery even in medical context\n"
+                "- Characters MUST always be fully clothed in modest professional or casual attire\n"
+                "- For pregnancy/birth topics: show hospital exterior, waiting room, character holding baby, nursery — NEVER the procedure\n"
+                "- For body changes: show character in loose clothing reacting emotionally — NEVER exposed body\n"
+                "- For medical topics: use symbolic/metaphorical visuals (stethoscope, medical chart from afar, doctor's office)\n"
+                "- Think 'family-friendly illustration suitable for a workplace, classroom, or public screen'\n\n"
+            )
+            system_prompt += (
+                "TOPIC DETECTION (CRITICAL):\n"
                 "This audio covers distinct topics one at a time, each roughly 60 seconds long.\n"
                 "Each topic begins with the narrator clearly stating the topic name (e.g., 'Back Pain', 'Morning Sickness').\n"
                 "You MUST detect each topic boundary and include a \"topic_title\" field in the FIRST scene of each new topic.\n\n"
@@ -2139,9 +2194,9 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir):
             filter_parts.append(f"[0:a]atrim=start={seg_start:.3f},asetpts=PTS-STARTPTS[seg{i}]")
         concat_labels.append(f"[seg{i}]")
 
-        # 1s silence after each segment (except last)
+        # 2s silence after each segment (except last)
         if i < len(insert_points):
-            filter_parts.append(f"aevalsrc=0:d=1:s={sample_rate}:c=stereo[sil{i}]")
+            filter_parts.append(f"aevalsrc=0:d=2:s={sample_rate}:c=stereo[sil{i}]")
             concat_labels.append(f"[sil{i}]")
 
     total_streams = len(concat_labels)
@@ -2154,7 +2209,7 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir):
            '-map', '[out]', '-c:a', 'libmp3lame', '-b:a', '192k',
            output_path]
 
-    logger.info(f"Inserting {len(insert_points)} x 1s silence gaps into audio at: {[f'{t:.1f}s' for t in insert_points]}")
+    logger.info(f"Inserting {len(insert_points)} x 2s silence gaps into audio at: {[f'{t:.1f}s' for t in insert_points]}")
     subprocess.run(cmd, check=True, capture_output=True, timeout=300)
     logger.info(f"Audio with topic gaps saved to {output_path}")
     return output_path, insert_points
@@ -2556,70 +2611,111 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             for t, name in sorted(topic_titles_map.items()):
                 logger.info(f"  {t:.1f}s: {name}")
 
-            if len(topic_boundaries) >= 2:
-                # Step B: Insert 1s silence into audio between topics
-                emit_progress(session_id, 'generation', 27, f'Inserting {len(topic_boundaries)-1} topic gaps into audio...')
-                modified_audio_path, insert_points = insert_topic_silences(filepath, topic_boundaries, work_dir)
-                filepath = modified_audio_path
-                audio_duration = get_audio_duration(filepath)
-                logger.info(f"Audio duration after topic gaps: {audio_duration:.1f}s (+{len(insert_points)}s)")
+            if topic_boundaries:
+                SILENCE_DUR = 2.0   # seconds of silence between topics
+                TITLE_CARD_DUR = 2.5  # seconds the title card stays on screen
+                TITLE_OVERLAP = 0.5  # seconds title card overlaps into topic audio
 
-                # Step C: Mark non-first topic scenes BEFORE shifting (so we know which need title cards)
-                non_first_topics = set()
-                for b in topic_boundaries[1:]:
-                    for scene in scenes:
-                        if scene.get('topic_title') and abs(scene['start_time'] - b) < 1.0:
-                            non_first_topics.add(id(scene))
-                            break
-
-                # Shift scene timestamps to account for inserted silences
-                for scene in scenes:
-                    shift = sum(1.0 for ip in insert_points if ip <= scene['start_time'] + 0.5)
-                    scene['start_time'] += shift
-                    scene['end_time'] += shift
-
-                # Step D: Insert title card scenes at each non-first topic boundary
-                # Title card timing: prev scene extends 0.5s into silence, title card fills last 0.5s
                 title_card_prompt = (
                     "A static title card with text on a soft pastel background. "
                     "Very subtle, gentle floating movement — the text softly hovers in place "
                     "with a dreamlike quality. Keep text perfectly readable and centered."
                 )
-                new_scenes = []
+
+                # Step B: Insert 2s silence between topics (not before first)
+                insert_points = []
+                if len(topic_boundaries) >= 2:
+                    emit_progress(session_id, 'generation', 27, f'Inserting {len(topic_boundaries)-1} topic gaps into audio...')
+                    modified_audio_path, insert_points = insert_topic_silences(filepath, topic_boundaries, work_dir)
+                    filepath = modified_audio_path
+                    audio_duration = get_audio_duration(filepath)
+                    logger.info(f"Audio duration after topic gaps: {audio_duration:.1f}s (+{len(insert_points) * SILENCE_DUR:.0f}s)")
+
+                # Step C: Mark non-first topic scenes BEFORE shifting
+                non_first_topics = set()
+                first_topic_scene_id = None
+                for b in topic_boundaries:
+                    for scene in scenes:
+                        if scene.get('topic_title') and abs(scene['start_time'] - b) < 1.0:
+                            if b == topic_boundaries[0]:
+                                first_topic_scene_id = id(scene)
+                            else:
+                                non_first_topics.add(id(scene))
+                            break
+
+                # Shift scene timestamps — 2s per silence insertion point
                 for scene in scenes:
-                    if id(scene) in non_first_topics:
-                        # This scene starts a topic that had silence inserted before it
-                        # The 1s gap is at [scene.start_time - 1.0, scene.start_time]
-                        gap_start = scene['start_time'] - 1.0
+                    shift = sum(SILENCE_DUR for ip in insert_points if ip <= scene['start_time'])
+                    scene['start_time'] += shift
+                    scene['end_time'] += shift
 
-                        # Extend previous scene's visuals 0.5s into the silence
-                        if new_scenes:
-                            new_scenes[-1]['end_time'] = gap_start + 0.5
+                # Step D: Build title card image helper
+                def make_title_card_info(topic_title):
+                    safe_name = topic_title.replace(' ', '_').replace('/', '_')
+                    card_img_path = os.path.join(work_dir, f'title_card_{safe_name}.png')
+                    create_topic_title_image(topic_title, card_img_path)
+                    with open(card_img_path, 'rb') as f:
+                        card_b64 = base64.b64encode(f.read()).decode()
+                    return card_img_path, card_b64
 
-                        # Create title card for the last 0.5s of the silence
-                        safe_name = scene['topic_title'].replace(' ', '_').replace('/', '_')
-                        card_img_path = os.path.join(work_dir, f'title_card_{safe_name}.png')
-                        create_topic_title_image(scene['topic_title'], card_img_path)
+                # Step E: Insert title card scenes
+                new_scenes = []
 
-                        # Encode for Veo animation
-                        with open(card_img_path, 'rb') as f:
-                            card_b64 = base64.b64encode(f.read()).decode()
-
+                for scene in scenes:
+                    if first_topic_scene_id is not None and id(scene) == first_topic_scene_id:
+                        # FIRST TOPIC: title card at [0, 2.5], trim first scene
+                        card_img, card_b64 = make_title_card_info(scene['topic_title'])
                         title_card_scene = {
                             'scene_number': 0,
-                            'start_time': gap_start + 0.5,
-                            'end_time': scene['start_time'],
+                            'start_time': 0.0,
+                            'end_time': TITLE_CARD_DUR,
                             'narration_summary': f'Topic: {scene["topic_title"]}',
                             'visual_description': title_card_prompt,
                             'has_subject': False,
-                            'is_video': True,  # Animate via Veo for subtle floating effect
+                            'is_video': True,
                             'is_title_card': True,
                             'topic_title': scene['topic_title'],
-                            'title_card_image': card_img_path,
+                            'title_card_image': card_img,
                             'title_card_image_b64': f'data:image/png;base64,{card_b64}',
                         }
                         new_scenes.append(title_card_scene)
-                    new_scenes.append(scene)
+                        # Trim the first content scene to start after title card
+                        scene['start_time'] = max(scene['start_time'], TITLE_CARD_DUR)
+                        new_scenes.append(scene)
+
+                    elif id(scene) in non_first_topics:
+                        # NON-FIRST TOPICS: 2s silence gap precedes this scene
+                        # Title card starts 1s into silence, extends 0.5s past it
+                        # Silence gap: [scene.start_time - 2.0, scene.start_time]
+                        silence_start = scene['start_time'] - SILENCE_DUR
+                        card_start = silence_start + (SILENCE_DUR - TITLE_CARD_DUR + TITLE_OVERLAP)  # 1s into silence
+                        card_end = card_start + TITLE_CARD_DUR  # 2.5s later
+
+                        # Extend previous scene to cover the first part of the silence
+                        if new_scenes:
+                            new_scenes[-1]['end_time'] = card_start
+
+                        card_img, card_b64 = make_title_card_info(scene['topic_title'])
+                        title_card_scene = {
+                            'scene_number': 0,
+                            'start_time': card_start,
+                            'end_time': card_end,
+                            'narration_summary': f'Topic: {scene["topic_title"]}',
+                            'visual_description': title_card_prompt,
+                            'has_subject': False,
+                            'is_video': True,
+                            'is_title_card': True,
+                            'topic_title': scene['topic_title'],
+                            'title_card_image': card_img,
+                            'title_card_image_b64': f'data:image/png;base64,{card_b64}',
+                        }
+                        new_scenes.append(title_card_scene)
+                        # Trim topic's first scene to start after title card ends
+                        scene['start_time'] = card_end
+                        new_scenes.append(scene)
+                    else:
+                        new_scenes.append(scene)
+
                 scenes = new_scenes
 
                 # Re-sort by start_time and renumber
@@ -2628,9 +2724,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     scene['scene_number'] = i + 1
                 total = len(scenes)
 
-                logger.info(f"Topic title cards: inserted {sum(1 for s in scenes if s.get('is_title_card'))} title card scenes, total scenes: {total}")
+                title_count = sum(1 for s in scenes if s.get('is_title_card'))
+                logger.info(f"Topic title cards: inserted {title_count} title cards (incl. first topic), total scenes: {total}")
             else:
-                logger.warning(f"Topic title cards enabled but only {len(topic_boundaries)} topics detected — skipping")
+                logger.warning(f"Topic title cards enabled but no topics detected — skipping")
 
         # Animation flags — driven by format_config
         format_label = format_config.get('base', 'pulse')
@@ -2763,6 +2860,20 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             scene_has_subject = scene.get('has_subject', False) and has_subject
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             prompt = scene['visual_description']
+            # Content safety: sanitize unsafe terms for pregnancy/medical channels
+            if topic_title_cards_enabled:
+                import re
+                _unsafe = [
+                    (r'\b(naked|nude|nudity|topless|bare.?breasted?)\b', 'modestly dressed'),
+                    (r'\b(genital[s]?|vagina[l]?|penis|vulva|cervix|uterus)\b', 'medical symbol'),
+                    (r'\b(exposed\s+(body|skin|belly|torso|chest|breast))', 'clothed figure'),
+                    (r'\b(anatomical\s+diagram|cross.?section|internal\s+anatomy|dissection)\b', 'educational illustration'),
+                    (r'\b(graphic\s+(birth|delivery|surgery|procedure))\b', 'hospital room scene'),
+                    (r'\b(blood|bleeding|bloody|surgical\s+incision)\b', 'medical care'),
+                    (r'\b(breast.?feeding|nursing\s+bare)\b', 'mother caring for baby'),
+                ]
+                for pattern, replacement in _unsafe:
+                    prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
             if image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
             result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
