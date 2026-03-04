@@ -667,6 +667,47 @@ def migrate_pregnancy_explainer_female_only():
 migrate_pregnancy_explainer_female_only()
 
 
+def migrate_pregnancy_explainer_no_title_cards():
+    """One-time migration: disable title cards & silence gaps, extend Veo animation to 180s."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_pregnancy_no_titlecards.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== PREGNANCY EXPLAINER: REMOVE TITLE CARDS + EXTEND VEO ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            if cfg.get('name') != 'Pregnancy Explainer':
+                continue
+
+            fmt = cfg.setdefault('format', {})
+            # Disable title cards and silence gaps
+            fmt['topic_title_cards'] = False
+            # Extend Veo animated intro to 180 seconds
+            fmt['intro_duration'] = 180
+            fmt['intro_animated'] = True
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(config_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            logger.info(f"  Updated '{cfg['name']}' ({name}): title_cards=False, intro_duration=180, intro_animated=True")
+        except Exception as e:
+            logger.error(f"  Failed to update {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== PREGNANCY EXPLAINER: REMOVE TITLE CARDS + EXTEND VEO COMPLETE ===")
+
+migrate_pregnancy_explainer_no_title_cards()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
@@ -1725,7 +1766,7 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
     # Text-only style or no style — use basic generateImage with style in prompt
     style_text = whisk_session.get('style_text', '') if whisk_session else ''
     if style_text:
-        full_prompt = f"ART STYLE: {style_text}. Scene: {prompt}"
+        full_prompt = f"MANDATORY ART STYLE — every element must be rendered in this style: {style_text}. DO NOT use photorealistic or realistic rendering. Scene: {prompt}"
     else:
         full_prompt = prompt
 
@@ -1843,12 +1884,13 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
             # so don't re-add the raw copyrighted style text
             styled_prompt = prompt
         else:
-            styled_prompt = f"{style_text} style. {prompt}"
+            styled_prompt = f"MANDATORY ART STYLE — every element must be rendered in this style: {style_text}. DO NOT use photorealistic or realistic rendering. {prompt}"
         if has_subject:
             styled_prompt = f"Create a unique new scene — DO NOT copy the subject reference image. {styled_prompt}"
     elif has_style_image:
-        # Style image is the reference — reinforce that we want a NEW scene, not a copy
-        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image). {prompt}"
+        # Style image is the reference — reinforce style_text alongside image
+        style_reinforcement = f" MANDATORY ART STYLE: {style_text}. DO NOT use photorealistic or realistic rendering." if style_text else ""
+        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image).{style_reinforcement} {prompt}"
     else:
         styled_prompt = prompt
 
