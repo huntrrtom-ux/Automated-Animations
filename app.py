@@ -517,6 +517,69 @@ def migrate_v53_channel_updates():
 migrate_v53_channel_updates()
 
 
+def migrate_pregnancy_explainer_channel():
+    """One-time migration: duplicate Mama Knowledge as Pregnancy Explainer with topic title cards."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_pregnancy_explainer.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== PREGNANCY EXPLAINER MIGRATION: Starting ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+
+    # Find Mama Knowledge by name
+    mama_id = None
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                if cfg.get('name') == 'Mama Knowledge':
+                    mama_id = name
+                    break
+            except Exception:
+                pass
+
+    if not mama_id:
+        logger.warning("  'Mama Knowledge' not found, skipping Pregnancy Explainer creation")
+        with open(flag_path, 'w') as f:
+            f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+        return
+
+    # Copy entire channel directory (config, style, subject, logo)
+    new_id = 'ch_' + str(uuid.uuid4())[:8]
+    src_dir = os.path.join(channel_dir, mama_id)
+    dst_dir = os.path.join(channel_dir, new_id)
+    shutil.copytree(src_dir, dst_dir)
+
+    # Update config
+    cp_config_path = os.path.join(dst_dir, 'config.json')
+    with open(cp_config_path, 'r') as f:
+        cfg = json.load(f)
+    cfg['name'] = 'Pregnancy Explainer'
+    cfg['tags'] = []  # User will add tags via admin dashboard
+    cfg['tag_colors'] = {}
+    cfg.setdefault('format', {})['topic_title_cards'] = True
+    cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+    with open(cp_config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    # Add to registry
+    registry = get_channel_registry()
+    registry.append(new_id)
+    save_channel_registry(registry)
+
+    logger.info(f"  Created 'Pregnancy Explainer' as {new_id} (copied from Mama Knowledge {mama_id})")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== PREGNANCY EXPLAINER MIGRATION COMPLETE ===")
+
+migrate_pregnancy_explainer_channel()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
@@ -911,6 +974,26 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
             '"has_subject": true, "is_video": false}]}\n\n'
             f"{format_rules}"
         )
+        # Topic title card detection instructions (Pregnancy Explainer channel)
+        if format_config.get('topic_title_cards', False):
+            system_prompt += (
+                "\n\nTOPIC DETECTION (CRITICAL):\n"
+                "This audio covers distinct topics one at a time, each roughly 60 seconds long.\n"
+                "Each topic begins with the narrator clearly stating the topic name (e.g., 'Back Pain', 'Morning Sickness').\n"
+                "You MUST detect each topic boundary and include a \"topic_title\" field in the FIRST scene of each new topic.\n\n"
+                "Topic detection rules:\n"
+                "- Listen for when the narrator introduces a new topic by name — this is a clear boundary\n"
+                "- The topic_title should be a SHORT name (1-4 words) extracted from the narrator's announcement\n"
+                "- Set topic_title ONLY on the FIRST scene of each new topic\n"
+                "- All subsequent scenes within the same topic should NOT have topic_title\n"
+                "- The very first topic in the audio MUST have a topic_title\n"
+                "- Expect 8-12 topics across the full audio\n\n"
+                "Updated JSON format with topic_title:\n"
+                '{"scenes": [{"scene_number": 1, "segment_start": 1, "segment_end": 3, '
+                '"narration_summary": "...", "visual_description": "...", '
+                '"has_subject": true, "is_video": false, "topic_title": "Back Pain"}]}\n'
+                "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
+            )
         if scene_instructions:
             system_prompt += f"\n\nCHANNEL-SPECIFIC SCENE INSTRUCTIONS:\n{scene_instructions}\n"
 
@@ -1122,7 +1205,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                     else:
                         part_desc = f"{base_desc} — from a different angle and composition"
                     
-                    split_scenes.append({
+                    part_scene = {
                         'scene_number': len(split_scenes) + 1,
                         'start_time': part_start,
                         'end_time': part_end,
@@ -1130,7 +1213,11 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                         'visual_description': part_desc,
                         'has_subject': scene.get('has_subject', True),
                         'is_video': scene.get('is_video', False)
-                    })
+                    }
+                    # Preserve topic_title on the first part only
+                    if p == 0 and scene.get('topic_title'):
+                        part_scene['topic_title'] = scene['topic_title']
+                    split_scenes.append(part_scene)
                 logger.info(f"Split {dur:.1f}s scene into {num_parts} parts")
             else:
                 scene['scene_number'] = len(split_scenes) + 1
@@ -1982,6 +2069,97 @@ def create_placeholder_image(prompt, output_path):
     img.save(output_path, 'PNG')
 
 
+def create_topic_title_image(topic_name, output_path):
+    """Create a 1920x1080 title card with soft pastel blush pink background and white text."""
+    from PIL import ImageDraw, ImageFont
+    img = Image.new('RGB', (1920, 1080), color=(232, 216, 214))
+    draw = ImageDraw.Draw(img)
+    text = topic_name.strip()
+    # Try large font first, shrink if too wide
+    font_size = 72
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    if text_w > 1600:
+        font_size = 56
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+        except Exception:
+            pass
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (1920 - text_w) // 2
+    y = (1080 - text_h) // 2
+    draw.text((x, y), text, fill=(255, 255, 255), font=font)
+    img.save(output_path, 'PNG')
+    logger.info(f"Created title card image: '{topic_name}' -> {output_path}")
+
+
+def insert_topic_silences(audio_path, topic_boundaries, work_dir):
+    """Insert 1 second of silence at each topic boundary (except the first topic).
+
+    Returns (new_audio_path, insert_points) where insert_points are the original
+    timestamps where silence was inserted (boundaries[1:]).
+    """
+    if not topic_boundaries or len(topic_boundaries) < 2:
+        return audio_path, []
+
+    boundaries = sorted(topic_boundaries)
+    # Only insert silence BETWEEN topics, not before the first one
+    insert_points = boundaries[1:]
+    if not insert_points:
+        return audio_path, []
+
+    # Get audio sample rate
+    try:
+        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'stream=sample_rate',
+                     '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        sample_rate = probe_result.stdout.strip().split('\n')[0] or '44100'
+    except Exception:
+        sample_rate = '44100'
+
+    # Build ffmpeg filter_complex: split audio at boundaries, interleave with silence
+    filter_parts = []
+    concat_labels = []
+    num_segments = len(insert_points) + 1
+
+    for i in range(num_segments):
+        seg_start = 0.0 if i == 0 else insert_points[i - 1]
+        seg_end = insert_points[i] if i < len(insert_points) else None
+
+        # Audio segment
+        if seg_end is not None:
+            filter_parts.append(f"[0:a]atrim=start={seg_start:.3f}:end={seg_end:.3f},asetpts=PTS-STARTPTS[seg{i}]")
+        else:
+            filter_parts.append(f"[0:a]atrim=start={seg_start:.3f},asetpts=PTS-STARTPTS[seg{i}]")
+        concat_labels.append(f"[seg{i}]")
+
+        # 1s silence after each segment (except last)
+        if i < len(insert_points):
+            filter_parts.append(f"aevalsrc=0:d=1:s={sample_rate}:c=stereo[sil{i}]")
+            concat_labels.append(f"[sil{i}]")
+
+    total_streams = len(concat_labels)
+    filter_parts.append(f"{''.join(concat_labels)}concat=n={total_streams}:v=0:a=1[out]")
+    filter_complex = ';'.join(filter_parts)
+
+    output_path = os.path.join(work_dir, '_audio_with_topic_gaps.mp3')
+    cmd = ['ffmpeg', '-y', '-i', audio_path,
+           '-filter_complex', filter_complex,
+           '-map', '[out]', '-c:a', 'libmp3lame', '-b:a', '192k',
+           output_path]
+
+    logger.info(f"Inserting {len(insert_points)} x 1s silence gaps into audio at: {[f'{t:.1f}s' for t in insert_points]}")
+    subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+    logger.info(f"Audio with topic gaps saved to {output_path}")
+    return output_path, insert_points
+
+
 def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
     """Create a video from a still image with optional smooth Ken Burns effect.
     
@@ -2231,7 +2409,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         MIN_DUR = 5.0
         merged = []
         for scene in scenes:
-            if merged and (merged[-1]['end_time'] - merged[-1]['start_time']) < MIN_DUR:
+            if merged and (merged[-1]['end_time'] - merged[-1]['start_time']) < MIN_DUR and not scene.get('topic_title'):
                 merged[-1]['end_time'] = scene['end_time']
                 merged[-1]['visual_description'] += " " + scene['visual_description']
                 merged[-1]['has_subject'] = merged[-1].get('has_subject', False) or scene.get('has_subject', False)
@@ -2363,6 +2541,97 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             scene['scene_number'] = i + 1
         total = len(scenes)
 
+        # ===================== TOPIC TITLE CARDS (Pregnancy Explainer) =====================
+        topic_title_cards_enabled = format_config.get('topic_title_cards', False)
+        if topic_title_cards_enabled:
+            # Step A: Collect topic boundaries from scene detection results
+            topic_boundaries = []
+            topic_titles_map = {}  # original_start_time -> topic_title
+            for scene in scenes:
+                if scene.get('topic_title'):
+                    topic_boundaries.append(scene['start_time'])
+                    topic_titles_map[scene['start_time']] = scene['topic_title']
+
+            logger.info(f"Topic title cards: detected {len(topic_boundaries)} topic boundaries")
+            for t, name in sorted(topic_titles_map.items()):
+                logger.info(f"  {t:.1f}s: {name}")
+
+            if len(topic_boundaries) >= 2:
+                # Step B: Insert 1s silence into audio between topics
+                emit_progress(session_id, 'generation', 27, f'Inserting {len(topic_boundaries)-1} topic gaps into audio...')
+                modified_audio_path, insert_points = insert_topic_silences(filepath, topic_boundaries, work_dir)
+                filepath = modified_audio_path
+                audio_duration = get_audio_duration(filepath)
+                logger.info(f"Audio duration after topic gaps: {audio_duration:.1f}s (+{len(insert_points)}s)")
+
+                # Step C: Mark non-first topic scenes BEFORE shifting (so we know which need title cards)
+                non_first_topics = set()
+                for b in topic_boundaries[1:]:
+                    for scene in scenes:
+                        if scene.get('topic_title') and abs(scene['start_time'] - b) < 1.0:
+                            non_first_topics.add(id(scene))
+                            break
+
+                # Shift scene timestamps to account for inserted silences
+                for scene in scenes:
+                    shift = sum(1.0 for ip in insert_points if ip <= scene['start_time'] + 0.5)
+                    scene['start_time'] += shift
+                    scene['end_time'] += shift
+
+                # Step D: Insert title card scenes at each non-first topic boundary
+                # Title card timing: prev scene extends 0.5s into silence, title card fills last 0.5s
+                title_card_prompt = (
+                    "A static title card with text on a soft pastel background. "
+                    "Very subtle, gentle floating movement — the text softly hovers in place "
+                    "with a dreamlike quality. Keep text perfectly readable and centered."
+                )
+                new_scenes = []
+                for scene in scenes:
+                    if id(scene) in non_first_topics:
+                        # This scene starts a topic that had silence inserted before it
+                        # The 1s gap is at [scene.start_time - 1.0, scene.start_time]
+                        gap_start = scene['start_time'] - 1.0
+
+                        # Extend previous scene's visuals 0.5s into the silence
+                        if new_scenes:
+                            new_scenes[-1]['end_time'] = gap_start + 0.5
+
+                        # Create title card for the last 0.5s of the silence
+                        safe_name = scene['topic_title'].replace(' ', '_').replace('/', '_')
+                        card_img_path = os.path.join(work_dir, f'title_card_{safe_name}.png')
+                        create_topic_title_image(scene['topic_title'], card_img_path)
+
+                        # Encode for Veo animation
+                        with open(card_img_path, 'rb') as f:
+                            card_b64 = base64.b64encode(f.read()).decode()
+
+                        title_card_scene = {
+                            'scene_number': 0,
+                            'start_time': gap_start + 0.5,
+                            'end_time': scene['start_time'],
+                            'narration_summary': f'Topic: {scene["topic_title"]}',
+                            'visual_description': title_card_prompt,
+                            'has_subject': False,
+                            'is_video': True,  # Animate via Veo for subtle floating effect
+                            'is_title_card': True,
+                            'topic_title': scene['topic_title'],
+                            'title_card_image': card_img_path,
+                            'title_card_image_b64': f'data:image/png;base64,{card_b64}',
+                        }
+                        new_scenes.append(title_card_scene)
+                    new_scenes.append(scene)
+                scenes = new_scenes
+
+                # Re-sort by start_time and renumber
+                scenes.sort(key=lambda s: s['start_time'])
+                for i, scene in enumerate(scenes):
+                    scene['scene_number'] = i + 1
+                total = len(scenes)
+
+                logger.info(f"Topic title cards: inserted {sum(1 for s in scenes if s.get('is_title_card'))} title card scenes, total scenes: {total}")
+            else:
+                logger.warning(f"Topic title cards enabled but only {len(topic_boundaries)} topics detected — skipping")
+
         # Animation flags — driven by format_config
         format_label = format_config.get('base', 'pulse')
         logger.info(f"Animation selection for format={format_label}, {len(scenes)} scenes:")
@@ -2393,6 +2662,11 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         animation_pattern = format_config.get('animation_pattern', '')
         animated_count = 0
         for i, scene in enumerate(scenes):
+            # Title card scenes already have is_video set — don't override
+            if scene.get('is_title_card'):
+                if scene.get('is_video'):
+                    animated_count += 1
+                continue
             if animation_pattern == 'alternating':
                 # Alternate: animate even-indexed scenes (0, 2, 4, ...)
                 scene['is_video'] = (i % 2 == 0)
@@ -2473,6 +2747,19 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         def generate_single_image(idx):
             scene = scenes[idx]
             scene_num = scene['scene_number']
+
+            # Title card scenes: image already generated by PIL, return as image_info for Veo
+            if scene.get('is_title_card'):
+                card_img = scene.get('title_card_image')
+                card_b64 = scene.get('title_card_image_b64', '')
+                logger.info(f"Scene {scene_num}: title card '{scene.get('topic_title')}' — PIL image (skipping Whisk)")
+                return idx, {
+                    'encoded_image': card_b64,
+                    'media_id': '',
+                    'prompt': scene['visual_description'],
+                    'workflow_id': str(uuid.uuid4()),
+                }
+
             scene_has_subject = scene.get('has_subject', False) and has_subject
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             prompt = scene['visual_description']
@@ -2517,7 +2804,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         
         # ===================== PHASE 1B: RETRY FAILED SCENES =====================
         # Find scenes that got placeholder images (result was None)
-        failed_indices = [i for i, r in enumerate(image_results) if r is None]
+        failed_indices = [i for i, r in enumerate(image_results) if r is None and not scenes[i].get('is_title_card')]
         if failed_indices:
             logger.info(f"=== PHASE 1B: Retrying {len(failed_indices)} failed scenes (1 at a time) ===")
             emit_progress(session_id, 'generation', 56, f'Retrying 0/{len(failed_indices)} images...', log_type='warn')
@@ -2653,6 +2940,29 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             is_video = scene.get('is_video', False)
             scene_effect = get_scene_effect(format_config, is_video)
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
+
+            # Title card scenes: use pre-generated PIL image (animated by Veo if available)
+            if scene.get('is_title_card'):
+                title_img = scene.get('title_card_image', img_path)
+                # Check if Veo animation succeeded for this title card
+                if i in anim_results:
+                    animated, video_path = anim_results[i]
+                    if animated and video_path:
+                        # Trim Veo animation to title card duration
+                        trimmed = os.path.join(work_dir, f'scene_{scene_num:04d}_titlecard.mp4')
+                        try:
+                            cmd = ['ffmpeg', '-y', '-i', video_path, '-t', str(duration),
+                                   '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-r', '25',
+                                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+                                   trimmed]
+                            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+                            return i, trimmed
+                        except Exception:
+                            pass  # Fall through to static
+                # Fallback: static title card image
+                vid = os.path.join(work_dir, f'scene_{scene_num:04d}_titlecard_static.mp4')
+                create_video_from_image(title_img, vid, duration, effect='none', scene_index=i)
+                return i, vid
 
             if i in anim_results:
                 animated, video_path = anim_results[i]
