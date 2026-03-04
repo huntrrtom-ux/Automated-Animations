@@ -708,6 +708,62 @@ def migrate_pregnancy_explainer_no_title_cards():
 migrate_pregnancy_explainer_no_title_cards()
 
 
+def migrate_space_theories_channel():
+    """One-time migration: create 'Space Theories Explained' channel with alternating animation."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_space_theories.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== SPACE THEORIES EXPLAINED MIGRATION: Starting ===")
+
+    # Create a fresh channel based on Pulse format
+    channel_id = save_channel(
+        name='Space Theories Explained',
+        base_format='pulse',
+        scene_instructions=(
+            "Include the subject character in approximately 70% of all scenes. "
+            "Leave some scenes as pure environment or space visuals without the subject.\n"
+            "For EVERY scene with the subject, describe their specific movements, facial expressions, "
+            "and hand/body gestures in vivid detail. Never leave the subject static or vaguely described."
+        ),
+        image_instructions=(
+            "Graphic, exaggerated, dramatic visual style. Use bold compositions, extreme perspectives, "
+            "vivid lighting, and theatrical staging. Scenes should feel cinematic and larger-than-life."
+        ),
+    )
+
+    # Patch format config with Space Theories overrides
+    channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(channel_dir, 'config.json')
+    with open(config_path, 'r') as f:
+        cfg = json.load(f)
+
+    fmt = cfg['format']
+    fmt['label'] = 'Space Theories'
+    fmt['description'] = 'Animated space theories with exaggerated visuals'
+    fmt['animation_pattern'] = 'alternating'
+    fmt['intro_animated'] = False
+    fmt['intro_scene_min_duration'] = 2
+    fmt['intro_scene_max_duration'] = 8
+    fmt['body_scene_min_duration'] = 2
+    fmt['body_scene_max_duration'] = 8
+    fmt['max_scene_duration'] = 8
+    fmt['subject_mode'] = 'auto'
+    fmt['subject_interval'] = 0
+    cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    logger.info(f"  Created 'Space Theories Explained' as {channel_id} with alternating animation, 2-8s scenes")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== SPACE THEORIES EXPLAINED MIGRATION COMPLETE ===")
+
+migrate_space_theories_channel()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
