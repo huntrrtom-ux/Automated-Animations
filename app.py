@@ -623,6 +623,50 @@ def migrate_pregnancy_explainer_safety():
 migrate_pregnancy_explainer_safety()
 
 
+def migrate_pregnancy_explainer_female_only():
+    """One-time migration: add female-only character constraint to Pregnancy Explainer."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_pregnancy_female.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== PREGNANCY EXPLAINER FEMALE-ONLY MIGRATION ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            if cfg.get('name') != 'Pregnancy Explainer':
+                continue
+
+            cfg['image_instructions'] = (
+                "Family-friendly medical education illustration. "
+                "All characters must be female women — never depict male characters. "
+                "All characters must be fully clothed and modest at all times. "
+                "No nudity, no exposed bodies, no genitals, no revealing clothing, "
+                "no graphic medical imagery, no anatomical diagrams, no surgical scenes. "
+                "Use tasteful, non-explicit, symbolic visuals appropriate for all audiences "
+                "and all environments including workplaces and classrooms."
+            )
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(config_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            logger.info(f"  Updated '{cfg['name']}' ({name}) with female-only image_instructions")
+        except Exception as e:
+            logger.error(f"  Failed to update {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== PREGNANCY EXPLAINER FEMALE-ONLY MIGRATION COMPLETE ===")
+
+migrate_pregnancy_explainer_female_only()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
@@ -1025,6 +1069,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "- NEVER describe nudity, exposed bodies, bare skin, or intimate anatomy in any visual\n"
                 "- NEVER describe graphic medical procedures, surgery, blood, or internal anatomy diagrams\n"
                 "- NEVER describe genitals, breasts, or any revealing imagery even in medical context\n"
+                "- ALL characters MUST be female — NEVER depict male characters in any visual\n"
                 "- Characters MUST always be fully clothed in modest professional or casual attire\n"
                 "- For pregnancy/birth topics: show hospital exterior, waiting room, character holding baby, nursery — NEVER the procedure\n"
                 "- For body changes: show character in loose clothing reacting emotionally — NEVER exposed body\n"
@@ -1033,16 +1078,21 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
             )
             system_prompt += (
                 "TOPIC DETECTION (CRITICAL):\n"
-                "This audio covers distinct topics one at a time, each roughly 60 seconds long.\n"
+                "This audio covers distinct topics one at a time. Topics vary in length — some are short, some are long.\n"
                 "Each topic begins with the narrator clearly stating the topic name (e.g., 'Back Pain', 'Morning Sickness').\n"
+                "Do NOT assume any fixed duration per topic — only use the narrator's announcement of a new topic name as the boundary.\n"
                 "You MUST detect each topic boundary and include a \"topic_title\" field in the FIRST scene of each new topic.\n\n"
                 "Topic detection rules:\n"
-                "- Listen for when the narrator introduces a new topic by name — this is a clear boundary\n"
+                "- The segment_start of a topic_title scene MUST be the EXACT segment where "
+                "the narrator FIRST speaks the new topic name — NOT any earlier segment\n"
+                "- NEVER include the end of the previous topic's speech in the topic_title scene\n"
+                "- If a segment contains both the tail of one topic and the start of the next, "
+                "the topic_title scene must start at the NEXT segment after that one\n"
+                "- It is better to start a topic_title scene one segment LATE than one segment EARLY\n"
                 "- The topic_title should be a SHORT name (1-4 words) extracted from the narrator's announcement\n"
                 "- Set topic_title ONLY on the FIRST scene of each new topic\n"
                 "- All subsequent scenes within the same topic should NOT have topic_title\n"
-                "- The very first topic in the audio MUST have a topic_title\n"
-                "- Expect 8-12 topics across the full audio\n\n"
+                "- The very first topic in the audio MUST have a topic_title\n\n"
                 "Updated JSON format with topic_title:\n"
                 '{"scenes": [{"scene_number": 1, "segment_start": 1, "segment_end": 3, '
                 '"narration_summary": "...", "visual_description": "...", '
@@ -1627,7 +1677,7 @@ def sanitize_style_text(style_text):
 
 
 # ===================== WHISK IMAGE GENERATION =====================
-def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
+def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False, safe_fallback_prompt=None):
     # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
         current_prompt = prompt
@@ -1661,7 +1711,14 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 else:
                     current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
-        logger.error(f"All 3 attempts failed for scene {scene_num}, using placeholder")
+        # All 3 attempts failed — try safe fallback prompt if provided
+        if safe_fallback_prompt:
+            logger.info(f"All 3 attempts failed for scene {scene_num}, trying safe fallback prompt")
+            result = generate_image_with_recipe(safe_fallback_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=0)
+            if result is not None and result not in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED", "SESSION_EXPIRED"):
+                return result
+            logger.warning(f"Safe fallback also failed for scene {scene_num}")
+        logger.error(f"All attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
         return None
 
@@ -2154,19 +2211,24 @@ def create_topic_title_image(topic_name, output_path):
     logger.info(f"Created title card image: '{topic_name}' -> {output_path}")
 
 
-def insert_topic_silences(audio_path, topic_boundaries, work_dir):
-    """Insert 1 second of silence at each topic boundary (except the first topic).
+def insert_topic_silences(audio_path, topic_boundaries, work_dir, prepend_silence=0.0):
+    """Insert 2s of silence at each topic boundary (except the first topic).
+
+    If prepend_silence > 0, also prepend that many seconds of silence at the
+    very start of the audio (before the first topic).
 
     Returns (new_audio_path, insert_points) where insert_points are the original
     timestamps where silence was inserted (boundaries[1:]).
     """
-    if not topic_boundaries or len(topic_boundaries) < 2:
+    if not topic_boundaries:
         return audio_path, []
 
     boundaries = sorted(topic_boundaries)
     # Only insert silence BETWEEN topics, not before the first one
     insert_points = boundaries[1:]
-    if not insert_points:
+
+    # If no inter-topic silences and no prepend, nothing to do
+    if not insert_points and prepend_silence <= 0:
         return audio_path, []
 
     # Get audio sample rate
@@ -2181,6 +2243,12 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir):
     # Build ffmpeg filter_complex: split audio at boundaries, interleave with silence
     filter_parts = []
     concat_labels = []
+
+    # Prepend silence at the start if requested (for first topic audio delay)
+    if prepend_silence > 0:
+        filter_parts.append(f"aevalsrc=0:d={prepend_silence:.1f}:s={sample_rate}:c=stereo[presil]")
+        concat_labels.append("[presil]")
+
     num_segments = len(insert_points) + 1
 
     for i in range(num_segments):
@@ -2209,7 +2277,8 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir):
            '-map', '[out]', '-c:a', 'libmp3lame', '-b:a', '192k',
            output_path]
 
-    logger.info(f"Inserting {len(insert_points)} x 2s silence gaps into audio at: {[f'{t:.1f}s' for t in insert_points]}")
+    prepend_msg = f" (+ {prepend_silence:.1f}s prepend)" if prepend_silence > 0 else ""
+    logger.info(f"Inserting {len(insert_points)} x 2s silence gaps into audio{prepend_msg} at: {[f'{t:.1f}s' for t in insert_points]}")
     subprocess.run(cmd, check=True, capture_output=True, timeout=300)
     logger.info(f"Audio with topic gaps saved to {output_path}")
     return output_path, insert_points
@@ -2613,8 +2682,9 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
 
             if topic_boundaries:
                 SILENCE_DUR = 2.0   # seconds of silence between topics
-                TITLE_CARD_DUR = 2.5  # seconds the title card stays on screen
-                TITLE_OVERLAP = 0.5  # seconds title card overlaps into topic audio
+                TITLE_CARD_DUR = 3.0  # seconds the title card stays on screen
+                TITLE_OVERLAP = 2.0  # seconds title card overlaps into topic audio
+                FIRST_TOPIC_DELAY = 1.0  # seconds of silence before first topic audio
 
                 title_card_prompt = (
                     "A static title card with text on a soft pastel background. "
@@ -2622,14 +2692,15 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     "with a dreamlike quality. Keep text perfectly readable and centered."
                 )
 
-                # Step B: Insert 2s silence between topics (not before first)
+                # Step B: Insert 1s silence at start + 2s silence between topics
                 insert_points = []
-                if len(topic_boundaries) >= 2:
-                    emit_progress(session_id, 'generation', 27, f'Inserting {len(topic_boundaries)-1} topic gaps into audio...')
-                    modified_audio_path, insert_points = insert_topic_silences(filepath, topic_boundaries, work_dir)
-                    filepath = modified_audio_path
-                    audio_duration = get_audio_duration(filepath)
-                    logger.info(f"Audio duration after topic gaps: {audio_duration:.1f}s (+{len(insert_points) * SILENCE_DUR:.0f}s)")
+                gap_count = max(0, len(topic_boundaries) - 1)
+                emit_progress(session_id, 'generation', 27, f'Inserting {FIRST_TOPIC_DELAY:.0f}s start delay + {gap_count} topic gaps into audio...')
+                modified_audio_path, insert_points = insert_topic_silences(
+                    filepath, topic_boundaries, work_dir, prepend_silence=FIRST_TOPIC_DELAY)
+                filepath = modified_audio_path
+                audio_duration = get_audio_duration(filepath)
+                logger.info(f"Audio duration after topic gaps: {audio_duration:.1f}s (+{FIRST_TOPIC_DELAY + len(insert_points) * SILENCE_DUR:.0f}s)")
 
                 # Step C: Mark non-first topic scenes BEFORE shifting
                 non_first_topics = set()
@@ -2643,9 +2714,9 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                                 non_first_topics.add(id(scene))
                             break
 
-                # Shift scene timestamps — 2s per silence insertion point
+                # Shift scene timestamps — 1s for initial delay + 2s per silence insertion point
                 for scene in scenes:
-                    shift = sum(SILENCE_DUR for ip in insert_points if ip <= scene['start_time'])
+                    shift = FIRST_TOPIC_DELAY + sum(SILENCE_DUR for ip in insert_points if ip <= scene['start_time'])
                     scene['start_time'] += shift
                     scene['end_time'] += shift
 
@@ -2663,7 +2734,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
 
                 for scene in scenes:
                     if first_topic_scene_id is not None and id(scene) == first_topic_scene_id:
-                        # FIRST TOPIC: title card at [0, 2.5], trim first scene
+                        # FIRST TOPIC: title card at [0, 3.0], 1s audio delay then narrator speaks
                         card_img, card_b64 = make_title_card_info(scene['topic_title'])
                         title_card_scene = {
                             'scene_number': 0,
@@ -2685,11 +2756,11 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
 
                     elif id(scene) in non_first_topics:
                         # NON-FIRST TOPICS: 2s silence gap precedes this scene
-                        # Title card starts 1s into silence, extends 0.5s past it
+                        # Title card starts halfway through silence, extends into topic audio
                         # Silence gap: [scene.start_time - 2.0, scene.start_time]
                         silence_start = scene['start_time'] - SILENCE_DUR
-                        card_start = silence_start + (SILENCE_DUR - TITLE_CARD_DUR + TITLE_OVERLAP)  # 1s into silence
-                        card_end = card_start + TITLE_CARD_DUR  # 2.5s later
+                        card_start = silence_start + (SILENCE_DUR - TITLE_CARD_DUR + TITLE_OVERLAP)  # halfway into silence
+                        card_end = card_start + TITLE_CARD_DUR  # 3.0s on screen
 
                         # Extend previous scene to cover the first part of the silence
                         if new_scenes:
@@ -2871,12 +2942,23 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     (r'\b(graphic\s+(birth|delivery|surgery|procedure))\b', 'hospital room scene'),
                     (r'\b(blood|bleeding|bloody|surgical\s+incision)\b', 'medical care'),
                     (r'\b(breast.?feeding|nursing\s+bare)\b', 'mother caring for baby'),
+                    (r'\b(man|men|male|boy|father|dad|husband|grandfather)\b', 'woman'),
                 ]
                 for pattern, replacement in _unsafe:
                     prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
             if image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
-            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+            # Build safe fallback prompt for pregnancy channel in case all attempts are blocked
+            fallback = None
+            if topic_title_cards_enabled:
+                fallback = (
+                    f"{image_instructions}. " if image_instructions else ""
+                ) + (
+                    "A gentle illustration of a happy pregnant woman in comfortable modest clothing, "
+                    "soft pastel colors, warm and peaceful setting. "
+                    "Family-friendly, tasteful, non-explicit."
+                )
+            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject, safe_fallback_prompt=fallback)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
 
