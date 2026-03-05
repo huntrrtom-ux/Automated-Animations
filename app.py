@@ -1865,8 +1865,13 @@ def sanitize_style_text(style_text):
 
 # ===================== WHISK IMAGE GENERATION =====================
 def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
-    # Route to recipe if we have uploaded images
-    if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
+    # Route to recipe if this scene will actually have media inputs.
+    # A session may have subject_media_id but this scene may not use it
+    # (scene_has_subject=False); if there's also no style image, recipe
+    # would be called with 0 inputs → Whisk returns 400 INVALID_ARGUMENT.
+    scene_will_use_subject = scene_has_subject and whisk_session and whisk_session.get('subject_media_id')
+    scene_will_use_style = whisk_session and whisk_session.get('style_media_id')
+    if whisk_session and (scene_will_use_style or scene_will_use_subject):
         current_prompt = prompt
         session_refreshed = False
         for attempt in range(3):
@@ -2025,6 +2030,14 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
                 "mediaGenerationId": whisk_session['style_media_id']
             }
         })
+
+    # Safety net: if no media inputs, runImageRecipe will fail with 400.
+    # Return None so the caller falls through to text-only generateImage.
+    if not recipe_inputs:
+        logger.warning(f"No recipe inputs for scene {scene_num} (subject={scene_has_subject}, "
+                        f"subject_media_id={bool(whisk_session.get('subject_media_id'))}, "
+                        f"style_media_id={bool(whisk_session.get('style_media_id'))}) — skipping recipe")
+        return None
 
     # Build style instruction — keep it clean and simple like browser UI
     style_text = whisk_session.get('style_text', '')
