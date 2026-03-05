@@ -1731,6 +1731,75 @@ def rephrase_prompt(original_prompt):
         return original_prompt
 
 
+def rewrite_prompt_for_safety(original_prompt, style_text='', has_subject=False):
+    """AI-powered full rewrite of a blocked prompt — completely reimagines the scene to pass safety filters
+    while preserving the topic, style, and character presence."""
+    try:
+        if GEMINI_API_KEY:
+            client = openai.OpenAI(api_key=GEMINI_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+            model = "gemini-2.5-flash"
+        else:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            model = "gpt-4o-mini"
+
+        style_directive = ""
+        if style_text:
+            style_directive = (
+                f"\n\nMANDATORY ART STYLE: The rewritten prompt MUST begin with this style directive: "
+                f"'{style_text} style.'"
+            )
+
+        subject_directive = ""
+        if has_subject:
+            subject_directive = (
+                "\n\nCHARACTER REQUIREMENT: The scene MUST include the main character/subject. "
+                "Describe their specific body movements, facial expression, and hand gestures "
+                "in the rewritten prompt. The character should feel alive and expressive."
+            )
+
+        system_msg = (
+            "You completely rewrite image generation prompts that were blocked by safety filters "
+            "after 3 attempts. The previous rephrasing was too mild — you must FUNDAMENTALLY "
+            "reimagine the scene to be safe for ALL audiences including children.\n\n"
+            "RULES:\n"
+            "- Keep the same general TOPIC and SETTING (e.g. space, planets, stars)\n"
+            "- REPLACE all violent, destructive, death, war, weapon, explosion, injury, or graphic content "
+            "with safe dramatic alternatives:\n"
+            "  'star exploding and destroying planets' → 'star glowing brilliantly with swirling cosmic energy'\n"
+            "  'civilization collapsing and people dying' → 'ancient ruins with dramatic storm clouds gathering'\n"
+            "  'asteroid impact wiping out life' → 'massive asteroid streaking across a dramatic sky'\n"
+            "  'black hole consuming everything' → 'black hole with a glowing accretion disk bending light'\n"
+            "  'alien invasion destroying cities' → 'alien spacecraft hovering above a city skyline at sunset'\n"
+            "- Use DRAMATIC, CINEMATIC framing — the scene should still feel intense and visually stunning\n"
+            "- NO death, dying, killing, blood, corpses, skeletons, suffering, agony, screaming, or panic\n"
+            "- NO weapons, missiles, bombs, guns, lasers firing at people, or military combat\n"
+            "- Prefer awe, wonder, mystery, and scale over fear, destruction, and violence\n"
+            "- Return ONLY the rewritten prompt, nothing else"
+            f"{style_directive}"
+            f"{subject_directive}"
+        )
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": f"This prompt was blocked 3 times by safety filters. "
+                 f"Completely rewrite it to be safe:\n\n{original_prompt}"}
+            ],
+            max_tokens=300,
+            temperature=0.4
+        )
+        rewritten = response.choices[0].message.content.strip()
+        logger.info(f"Safety rewrite: '{original_prompt[:60]}...' → '{rewritten[:80]}...'")
+        return rewritten
+    except Exception as e:
+        logger.warning(f"Safety rewrite failed: {e}")
+        # Last-resort fallback: generic safe prompt with style
+        if style_text:
+            return f"{style_text} style. A dramatic panoramic view of deep space with glowing nebulae and distant stars."
+        return "A dramatic panoramic view of deep space with glowing nebulae and distant stars."
+
+
 def sanitize_style_text(style_text):
     """One-time sanitization of user style text to remove copyrighted references
     before any scenes are generated.  This avoids per-scene safety retries."""
@@ -1774,7 +1843,7 @@ def sanitize_style_text(style_text):
 
 
 # ===================== WHISK IMAGE GENERATION =====================
-def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False, safe_fallback_prompt=None):
+def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
     # Route to recipe if we have uploaded images
     if whisk_session and (whisk_session.get('style_media_id') or whisk_session.get('subject_media_id')):
         current_prompt = prompt
@@ -1808,13 +1877,15 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
                 else:
                     current_prompt = rephrase_prompt(prompt)
                 time.sleep(3)
-        # All 3 attempts failed — try safe fallback prompt if provided
-        if safe_fallback_prompt:
-            logger.info(f"All 3 attempts failed for scene {scene_num}, trying safe fallback prompt")
-            result = generate_image_with_recipe(safe_fallback_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=0)
-            if result is not None and result not in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED", "SESSION_EXPIRED"):
-                return result
-            logger.warning(f"Safe fallback also failed for scene {scene_num}")
+        # All 3 attempts failed — dynamically rewrite the prompt for safety
+        style_text = whisk_session.get('style_text', '') if whisk_session else ''
+        safe_prompt = rewrite_prompt_for_safety(prompt, style_text=style_text, has_subject=scene_has_subject)
+        logger.info(f"All 3 attempts failed for scene {scene_num}, trying safety-rewritten prompt: {safe_prompt[:100]}")
+        emit_progress(session_id, 'generation', -1, f'Scene {scene_num} blocked 3x — trying safe rewrite...', log_type='warn')
+        result = generate_image_with_recipe(safe_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=0)
+        if result is not None and result not in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED", "SESSION_EXPIRED"):
+            return result
+        logger.warning(f"Safety rewrite also failed for scene {scene_num}")
         logger.error(f"All attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
         return None
@@ -3046,17 +3117,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
                     prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
             if image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
-            # Build safe fallback prompt for pregnancy channel in case all attempts are blocked
-            fallback = None
-            if topic_title_cards_enabled:
-                fallback = (
-                    f"{image_instructions}. " if image_instructions else ""
-                ) + (
-                    "A gentle illustration of a happy pregnant woman in comfortable modest clothing, "
-                    "soft pastel colors, warm and peaceful setting. "
-                    "Family-friendly, tasteful, non-explicit."
-                )
-            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject, safe_fallback_prompt=fallback)
+            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
 
