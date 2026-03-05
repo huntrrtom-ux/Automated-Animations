@@ -1032,7 +1032,7 @@ def get_format_subject_rules(format_config, has_subject):
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
             "A character reference image has been uploaded.\n"
-            "- The character should appear in MOST scenes — aim for at least 80% of scenes\n"
+            "- The character should appear in MOST scenes — aim for at least 70% of scenes\n"
             "- Set has_subject: true when the character can naturally fit into the scene\n"
             "- Set has_subject: false ONLY for pure establishing shots (wide landscapes, cityscapes, aerial views), "
             "object-only close-ups, or abstract concept visuals where a person would look forced or unnatural\n"
