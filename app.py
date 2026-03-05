@@ -2737,18 +2737,15 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
-        # AssemblyAI disabled for now — using Whisper directly
-        # To re-enable: uncomment the block below and comment out the Whisper line
-        # if ASSEMBLYAI_API_KEY:
-        #     try:
-        #         transcript_data = transcribe_audio_assemblyai(filepath, session_id)
-        #     except Exception as e:
-        #         logger.warning(f"AssemblyAI failed ({e}), falling back to Whisper")
-        #         emit_progress(session_id, 'transcription', 5, 'AssemblyAI failed — using Whisper...')
-        #         transcript_data = transcribe_audio(filepath, session_id)
-        # else:
-        #     transcript_data = transcribe_audio(filepath, session_id)
-        transcript_data = transcribe_audio(filepath, session_id)
+        if ASSEMBLYAI_API_KEY:
+            try:
+                transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+            except Exception as e:
+                logger.warning(f"AssemblyAI failed ({e}), falling back to Whisper")
+                emit_progress(session_id, 'transcription', 5, 'AssemblyAI failed — using Whisper...')
+                transcript_data = transcribe_audio(filepath, session_id)
+        else:
+            transcript_data = transcribe_audio(filepath, session_id)
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
