@@ -2194,9 +2194,11 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         return False
     original_key_index = key['index']
     if key.get('wait_seconds', 0) > 0:
-        alt_key = get_whisk_key()
+        # Only switch to keys not reserved by other sessions to avoid
+        # cascading rate-limits across concurrent generations
+        alt_key = whisk_pool.get_unreserved_key(session_id)
         if alt_key and alt_key['index'] != key['index']:
-            logger.info(f"Animate scene {scene_num}: reserved key {key['index']+1} cooling down, using key {alt_key['index']+1} instead")
+            logger.info(f"Animate scene {scene_num}: reserved key {key['index']+1} cooling down, using unreserved key {alt_key['index']+1} instead")
             key = alt_key
         else:
             time.sleep(min(key['wait_seconds'], 30))
@@ -2237,10 +2239,10 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
         logger.info(f"Animate response scene {scene_num}: status={response.status_code} (attempt {attempt+1})")
         if response.status_code == 401:
             whisk_pool.mark_expired(key['index'])
-            # Animation doesn't need account consistency — try another key
-            next_key = get_whisk_key()
+            # Animation doesn't need account consistency — try another unreserved key
+            next_key = whisk_pool.get_unreserved_key(session_id)
             if next_key and next_key['index'] != key['index']:
-                logger.info(f"Animate scene {scene_num}: key {key['index']+1} expired, switching to key {next_key['index']+1}")
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} expired, switching to unreserved key {next_key['index']+1}")
                 emit_progress(session_id, 'generation', -1, f'Animation key expired — switching to key {next_key["index"]+1}...', log_type='error')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
@@ -2267,10 +2269,12 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                     return "QUOTA_EXHAUSTED"
             else:
                 whisk_pool.mark_cooldown(key['index'], seconds=120)
-            # Animation sends rawBytes so it doesn't need account consistency — switch keys
-            next_key = get_whisk_key()
+            # Animation sends rawBytes so it doesn't need account consistency — but
+            # only switch to keys NOT reserved by other sessions to avoid cascading
+            # rate-limits across concurrent generations.
+            next_key = whisk_pool.get_unreserved_key(session_id)
             if next_key and next_key['index'] != key['index']:
-                logger.info(f"Animate scene {scene_num}: key {key['index']+1} {'quota exhausted' if is_quota else 'rate-limited'}, switching to key {next_key['index']+1}")
+                logger.info(f"Animate scene {scene_num}: key {key['index']+1} {'quota exhausted' if is_quota else 'rate-limited'}, switching to unreserved key {next_key['index']+1}")
                 emit_progress(session_id, 'generation', -1, f'Animation key {key["index"]+1} {"has 0 credits" if is_quota else "rate-limited"} — switching to key {next_key["index"]+1}...', log_type='warn')
                 key = next_key
                 headers = whisk_bearer_headers_for(key)
@@ -2278,13 +2282,16 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
                 animate_data["promptImageInput"]["mediaGenerationId"] = ""
                 time.sleep(5)
             else:
-                # All keys busy — wait on current key's cooldown
+                # No unreserved keys available — wait on own reserved key's cooldown
+                # instead of stealing another session's key
                 key = whisk_pool.get_reserved_key(session_id)
                 if key:
-                    if key.get('wait_seconds', 0) > 0:
-                        time.sleep(min(key['wait_seconds'], 30))
+                    wait = key.get('wait_seconds', 0)
+                    if wait > 0:
+                        logger.info(f"Animate scene {scene_num}: no unreserved keys, waiting {min(wait, 30):.0f}s on own key {key['index']+1}")
+                        time.sleep(min(wait, 30))
                     headers = whisk_bearer_headers_for(key)
-                time.sleep(30 * (attempt + 1))
+                time.sleep(10 * (attempt + 1))
             continue
         if response.status_code != 200:
             logger.warning(f"Animate scene {scene_num} HTTP error: {response.status_code} — body: {response.text[:300]}")

@@ -236,6 +236,34 @@ class WhiskPool:
         # No reservation — fallback to round-robin
         return self.get_next()
 
+    def get_unreserved_key(self, session_id):
+        """Get a non-cooling-down key that isn't reserved by another session.
+        Returns key dict or None if no such key exists.  Used by animation
+        retries so they don't steal keys from concurrent generations."""
+        with self._lock:
+            if not self.keys:
+                return None
+
+            now = time.time()
+            own_idx = self._reservations.get(session_id)
+
+            # Collect indices reserved by OTHER sessions
+            other_reserved = {idx for sid, idx in self._reservations.items() if sid != session_id}
+
+            for idx, key in enumerate(self.keys):
+                if key['cooldown_until'] > now:
+                    continue
+                if idx in other_reserved:
+                    continue
+                return {
+                    'token': key['token'],
+                    'cookie': key['cookie'],
+                    'index': idx
+                }
+
+            # No unreserved key available — caller should wait on its own
+            return None
+
     def release_key(self, session_id):
         """Release a session's key reservation."""
         with self._lock:
