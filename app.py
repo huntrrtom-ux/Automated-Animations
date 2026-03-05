@@ -1032,8 +1032,11 @@ def get_format_subject_rules(format_config, has_subject):
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
             "A character reference image has been uploaded.\n"
-            "- Set has_subject: true for EVERY scene — the character MUST appear in ALL scenes\n"
-            "- Describe the character's SPECIFIC emotion, body language, and action in every scene:\n"
+            "- The character should appear in MOST scenes — aim for at least 70% of scenes\n"
+            "- Set has_subject: true when the character can naturally fit into the scene\n"
+            "- Set has_subject: false ONLY for pure establishing shots (wide landscapes, cityscapes, aerial views), "
+            "object-only close-ups, or abstract concept visuals where a person would look forced or unnatural\n"
+            "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
             "  GOOD: 'looking frustrated while gripping a desk, furrowed brow, clenched jaw'\n"
             "  GOOD: 'pointing at a diagram with enthusiasm, wide smile'\n"
             "  BAD: 'the main character appears' (too vague)\n"
@@ -1146,6 +1149,23 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
             "- Use metaphorical visuals for abstract concepts: money = piles of coins/bills, debt = heavy chains, "
             "growth = rising stairs, risk = stormy skies, success = golden light\n"
             "- Describe: camera angle, lighting, mood, character emotions/poses, environment details, props\n"
+            "\nCINEMATIC SHOT VARIETY (CRITICAL — avoid repetitive framing):\n"
+            "- VARY camera angles across scenes: low angle (looking up), high angle (looking down), "
+            "eye level, bird's eye view, Dutch angle (tilted), over-the-shoulder\n"
+            "- VARY shot types: wide establishing shot (showing full environment), medium shot (waist up), "
+            "close-up (face/hands/details), extreme wide (tiny figure in vast landscape), "
+            "tracking shot (following movement), point-of-view shot\n"
+            "- VARY character positioning: character on left third, right third, center, "
+            "seen from behind, silhouetted, reflected in surface, partially obscured by foreground elements\n"
+            "- Include wider shots that showcase the TOPIC's environment — don't just show close-ups of the subject\n"
+            "- Use depth: foreground elements framing the shot, middle ground action, background context\n"
+            "- Examples of cinematic variety:\n"
+            "  'wide aerial view of a bustling trading floor, the character small among rows of screens'\n"
+            "  'low-angle shot looking up at the character standing confidently on a rooftop, city skyline behind'\n"
+            "  'over-the-shoulder view as the character examines a glowing map spread across a table'\n"
+            "  'extreme wide shot of a vast desert with the character as a tiny silhouette walking toward ruins'\n"
+            "  'bird's eye view looking straight down at the character surrounded by scattered documents'\n"
+            "- NEVER use the same shot type for more than 2 consecutive scenes\n"
             f"{subject_note}\n"
             "FORBIDDEN IN VISUAL DESCRIPTIONS:\n"
             "- NO text, words, numbers, labels, signs, letters, titles, captions, or writing anywhere\n"
@@ -1882,9 +1902,19 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         safe_prompt = rewrite_prompt_for_safety(prompt, style_text=style_text, has_subject=scene_has_subject)
         logger.info(f"All 3 attempts failed for scene {scene_num}, trying safety-rewritten prompt: {safe_prompt[:100]}")
         emit_progress(session_id, 'generation', -1, f'Scene {scene_num} blocked 3x — trying safe rewrite...', log_type='warn')
+        # First try with subject, then without — the subject reference may be
+        # triggering the safety filter when combined with certain scene content
         result = generate_image_with_recipe(safe_prompt, output_path, session_id, scene_num, whisk_session, scene_has_subject, safety_retry=0)
         if result is not None and result not in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED", "SESSION_EXPIRED"):
             return result
+        # If the safety rewrite failed WITH subject, try once WITHOUT subject —
+        # the subject reference image itself may conflict with the scene content
+        if scene_has_subject:
+            logger.info(f"Safety rewrite with subject failed for scene {scene_num} — retrying WITHOUT subject")
+            emit_progress(session_id, 'generation', -1, f'Scene {scene_num}: retrying without character...', log_type='warn')
+            result = generate_image_with_recipe(safe_prompt, output_path, session_id, scene_num, whisk_session, False, safety_retry=0)
+            if result is not None and result not in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED", "SESSION_EXPIRED"):
+                return result
         logger.warning(f"Safety rewrite also failed for scene {scene_num}")
         logger.error(f"All attempts failed for scene {scene_num}, using placeholder")
         create_placeholder_image(prompt, output_path)
@@ -2164,12 +2194,22 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
     # Only include media_id if on the original account that uploaded it —
     # other accounts would get 404 since media IDs are account-specific
     media_id = image_info.get("media_id", "") if key['index'] == original_key_index else ""
+    # Build motion instructions so Veo produces actual animation, not static output
+    motion_instructions = (
+        "Animate this scene with smooth, cinematic motion. "
+        "Add subtle camera movement (slow pan, gentle zoom, or drift). "
+        "Animate all elements naturally: flowing hair, swaying foliage, drifting clouds, "
+        "flickering lights, moving water, floating particles. "
+        "Characters should have lifelike micro-movements: breathing, blinking, slight head turns, "
+        "hand gestures, shifting weight. "
+        "The scene must feel alive and dynamic — never static or frozen."
+    )
     animate_data = {
         "clientContext": {"sessionId": session_ts, "tool": "BACKBONE", "workflowId": image_info.get("workflow_id", str(uuid.uuid4()))},
         "loopVideo": False, "modelKey": "", "modelNameType": "VEO_3_1_I2V_12STEP",
         "promptImageInput": {"mediaGenerationId": media_id,
                              "prompt": f"ORIGINAL IMAGE DESCRIPTION:\n{image_info.get('prompt', script)}", "rawBytes": raw_bytes},
-        "userInstructions": ""
+        "userInstructions": motion_instructions
     }
     logger.info(f"Whisk Animate starting for scene {scene_num} (media_id={'yes' if media_id else 'skipped(diff key)'}, key={key['index']+1}/{len(whisk_pool)}, has_raw_bytes={bool(raw_bytes)})")
     response = None
@@ -3036,10 +3076,11 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
             if first_anim and last_anim:
                 logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
 
-        # Force subject on every scene if subject_mode is 'all'
-        if has_subject and subject_mode == 'all':
-            for scene in scenes:
-                scene['has_subject'] = True
+        # For subject_mode 'all', Gemini already has strong guidance to include the
+        # character in ~80% of scenes.  We no longer force has_subject=True on every
+        # scene because scenes that don't naturally feature a person (landscapes,
+        # object close-ups, abstract visuals) trigger safety filters when the subject
+        # reference image is included, leading to placeholders.
 
         # Upload preset images
         whisk_session = None
