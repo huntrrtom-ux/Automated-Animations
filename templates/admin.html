@@ -231,10 +231,15 @@
             </div>
 
             <div class="card" style="overflow-x:auto;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+                    <span style="font-size:0.72rem;color:var(--text-muted)">Auto-pruned to last 7 days</span>
+                    <button class="btn btn-ghost btn-sm" id="clear-history-btn" style="color:var(--error);font-size:0.72rem">Clear All History</button>
+                </div>
                 <table class="history-table">
                     <thead>
                         <tr>
                             <th>Timestamp</th>
+                            <th>Device</th>
                             <th>Audio File</th>
                             <th>Duration</th>
                             <th>Scenes</th>
@@ -320,8 +325,10 @@
                 const channelName = h.channel_name || h.preset_name || '\u2014';
                 const formatLabel = h.format_label || h.animate_intro || '\u2014';
                 const fmtDisplay = typeof formatLabel === 'string' ? formatLabel.charAt(0).toUpperCase() + formatLabel.slice(1) : formatLabel;
+                const deviceId = h.device_id || '\u2014';
                 return `<tr>
                     <td>${h.timestamp || '\u2014'}</td>
+                    <td style="font-family:monospace;font-size:0.72rem" title="${escHtml(deviceId)}">${escHtml(deviceId)}</td>
                     <td>${h.filename || '\u2014'}</td>
                     <td class="duration-fmt">${fmtDuration(h.audio_duration)}</td>
                     <td>${h.scene_count || '\u2014'}</td>
@@ -334,6 +341,12 @@
                 </tr>`;
             }).join('');
         }
+
+        document.getElementById('clear-history-btn').addEventListener('click', async () => {
+            if (!confirm('Clear ALL generation history? This cannot be undone.')) return;
+            const resp = await fetch('/admin/history/clear', { method: 'POST' });
+            if (resp.ok) loadHistory();
+        });
 
         loadHistory();
         loadCredits();

@@ -11,6 +11,7 @@ import logging
 import random
 import tempfile
 import threading
+import hashlib
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -2686,7 +2687,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
+def process_voiceover(filepath, session_id, channel_id=None, project_title='', device_id='unknown'):
     # Track this session as active
     with _active_sessions_lock:
         active_sessions[session_id] = {
@@ -3492,6 +3493,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         session_credits = sum(e['amount'] for e in credits_data.get('log', []) if e.get('session_id') == session_id)
         log_generation({
             'session_id': session_id,
+            'device_id': device_id,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'filename': os.path.basename(filepath),
             'audio_duration': round(audio_duration, 1),
@@ -3521,6 +3523,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title=''):
         # Log failed generation
         log_generation({
             'session_id': session_id,
+            'device_id': device_id,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'filename': os.path.basename(filepath),
             'channel_id': channel_id or 'none',
@@ -3569,7 +3572,20 @@ def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, 'r') as f:
-                return json.load(f)
+                history = json.load(f)
+            # Auto-prune entries older than 7 days
+            cutoff = time.time() - 7 * 24 * 60 * 60
+            pruned = []
+            for entry in history:
+                try:
+                    ts = time.mktime(time.strptime(entry.get('timestamp', ''), '%Y-%m-%d %H:%M:%S'))
+                    if ts >= cutoff:
+                        pruned.append(entry)
+                except (ValueError, TypeError):
+                    pruned.append(entry)  # keep entries with unparseable timestamps
+            if len(pruned) < len(history):
+                _atomic_json_write(HISTORY_FILE, pruned)
+            return pruned
         except:
             return []
     return []
@@ -3603,6 +3619,16 @@ def admin_history_api():
     if auth != ADMIN_PASSWORD:
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify(load_history())
+
+
+@app.route('/admin/history/clear', methods=['POST'])
+def admin_history_clear():
+    auth = request.cookies.get('admin_auth')
+    if auth != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    with _history_lock:
+        _atomic_json_write(HISTORY_FILE, [])
+    return jsonify({'ok': True, 'message': 'History cleared'})
 
 
 # ===================== CREDITS TRACKING =====================
@@ -3700,10 +3726,15 @@ def upload_audio():
     channel_id = request.form.get('channel_id', '') or request.form.get('preset_id', '')
     project_title = request.form.get('project_title', '').strip()
     session_id = str(uuid.uuid4())[:12]
+    # Build a device fingerprint from IP + User-Agent
+    raw_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+    client_ip = raw_ip.split(',')[0].strip()
+    user_agent = request.headers.get('User-Agent', 'unknown')
+    device_id = hashlib.sha256(f'{client_ip}|{user_agent}'.encode()).hexdigest()[:12]
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title)
+    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/download/<session_id>/<filename>')
