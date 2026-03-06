@@ -880,7 +880,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
 
     poll_headers = {"authorization": ASSEMBLYAI_API_KEY}
     start = time.time()
-    TIMEOUT = 600  # 10 minutes
+    TIMEOUT = 1800  # 30 minutes
     poll_data = None
 
     while True:
