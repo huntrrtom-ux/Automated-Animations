@@ -869,7 +869,7 @@ def transcribe_audio_assemblyai(filepath, session_id):
     aai.settings.api_key = ASSEMBLYAI_API_KEY
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
-    config = aai.TranscriptionConfig(speech_models=["universal-3-pro", "universal-2"], language_detection=True, auto_chapters=True)
+    config = aai.TranscriptionConfig(speech_models=["universal-2"], language_detection=True, auto_chapters=True)
     transcriber = aai.Transcriber()
     emit_progress(session_id, 'transcription', 5, 'Submitting to AssemblyAI...')
 
