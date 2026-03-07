@@ -934,8 +934,8 @@ def migrate_tv_show_pov_channel():
         tags='',
         tag_colors={},
         scene_instructions=(
-            "This is a TV-show-style narration with a single persistent POV character. "
-            "The character must appear in EVERY scene — they are the protagonist. "
+            "This is a TV-show-style narration with a single persistent POV character "
+            "who should appear in roughly 80% of scenes — they are the protagonist. "
             "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
             "and ensure ALL scenes reflect that era consistently. "
             "Vary camera angles: wide establishing shots with character visible, medium shots of character "
@@ -972,6 +972,113 @@ def migrate_tv_show_pov_channel():
     logger.info("=== TV SHOW POV MIGRATION COMPLETE ===")
 
 migrate_tv_show_pov_channel()
+
+
+def migrate_fix_tv_show_pov_label():
+    """One-time fix: rename 'Botanical – POV Character' label to 'TV Show POV'."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_fix_tvshowpov_label.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'tv-show-pov' and fmt.get('label') != 'TV Show POV':
+                old_label = fmt.get('label', '?')
+                fmt['label'] = 'TV Show POV'
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"  Fixed TV Show POV label: '{old_label}' -> 'TV Show POV' in {name}")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== TV SHOW POV LABEL FIX COMPLETE ===")
+
+migrate_fix_tv_show_pov_label()
+
+
+def migrate_clear_new_channel_tags():
+    """One-time fix: remove auto-assigned tags from botanical and tv-show-pov channels."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_clear_new_channel_tags.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt_base = cfg.get('format', {}).get('base', '')
+            if fmt_base in ('botanical', 'tv-show-pov') and cfg.get('tags'):
+                old_tags = cfg['tags']
+                cfg['tags'] = []
+                cfg['tag_colors'] = {}
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"  Cleared tags from {name}: {old_tags}")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== CLEAR NEW CHANNEL TAGS COMPLETE ===")
+
+migrate_clear_new_channel_tags()
+
+
+def migrate_fix_tv_show_pov_scene_instructions():
+    """One-time fix: update TV Show POV scene_instructions from 'EVERY scene' to '80%'."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_fix_tvshowpov_instructions.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            if cfg.get('format', {}).get('base') != 'tv-show-pov':
+                continue
+            si = cfg.get('scene_instructions', '')
+            if 'must appear in EVERY scene' in si:
+                cfg['scene_instructions'] = si.replace(
+                    'The character must appear in EVERY scene — they are the protagonist.',
+                    'who should appear in roughly 80% of scenes — they are the protagonist.'
+                )
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"  Fixed TV Show POV scene_instructions in {name}: EVERY -> 80%")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== TV SHOW POV SCENE INSTRUCTIONS FIX COMPLETE ===")
+
+migrate_fix_tv_show_pov_scene_instructions()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
