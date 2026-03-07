@@ -11,6 +11,7 @@ import logging
 import random
 import tempfile
 import threading
+import bisect
 import hashlib
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
@@ -136,6 +137,25 @@ BASE_FORMATS = {
         'subject_interval': 300,
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 15,
+    },
+    'botanical': {
+        'base': 'botanical',
+        'label': 'Botanical',
+        'description': 'Plant-focused educational with subject character',
+        'intro_duration': 30,
+        'intro_animated': False,
+        'intro_scene_min_duration': 2,
+        'intro_scene_max_duration': 8,
+        'body_scene_min_duration': 2,
+        'body_scene_max_duration': 8,
+        'body_animated': False,
+        'periodic_animation_interval': 0,
+        'periodic_animation_window': 0,
+        'ken_burns_effect': 'zoom_in',
+        'subject_mode': 'botanical',
+        'subject_interval': 0,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 8,
     },
 }
 
@@ -1043,6 +1063,26 @@ def get_format_subject_rules(format_config, has_subject):
             "  BAD: 'the main character appears' (too vague)\n"
             "- The character should feel ALIVE — never stiff or static\n"
         )
+    elif subject_mode == 'botanical':
+        return (
+            "\n\nMAIN CHARACTER (SUBJECT REFERENCE) — BOTANICAL FORMAT:\n"
+            "A character reference image has been uploaded.\n"
+            "- Aim for the character to appear in roughly HALF (~50%) of all scenes\n"
+            "- Set has_subject: true when the character naturally fits — e.g. presenting a plant, "
+            "holding a pot, kneeling in a garden, gesturing toward foliage\n"
+            "- Set has_subject: false for PURE PLANT CLOSE-UPS — detailed shots of leaves, flowers, "
+            "roots, bark, seed pods, growth stages, or garden/habitat landscapes without people\n"
+            "- Alternate between subject scenes and plant-only scenes for visual variety\n"
+            "- When has_subject is true, describe the character's BODY LANGUAGE and ACTION only:\n"
+            "  GOOD: 'kneeling beside the plant, gently lifting a leaf to examine it'\n"
+            "  GOOD: 'standing in a greenhouse, holding a watering can, reaching toward a hanging basket'\n"
+            "  GOOD: 'crouching in a garden bed, carefully pruning stems with shears'\n"
+            "  BAD: 'smiling warmly with a joyful expression' (NO facial emotion descriptions)\n"
+            "  BAD: 'the main character appears' (too vague)\n"
+            "- NEVER describe facial expressions, emotions, or face details — focus ONLY on "
+            "body position, hand actions, posture, and interaction with plants/environment\n"
+            "- The character should feel dynamic and purposeful — actively engaging with the plants\n"
+        )
     elif subject_mode == 'sparse':
         interval_min = max(1, subject_interval // 60)
         return (
@@ -1217,6 +1257,29 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 '"has_subject": true, "is_video": false, "topic_title": "Back Pain"}]}\n'
                 "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
             )
+        # Botanical format: plant identification + subscribe CTA detection
+        if format_config.get('subject_mode') == 'botanical':
+            system_prompt += (
+                "\n\nPLANT IDENTIFICATION (CRITICAL FOR BOTANICAL FORMAT):\n"
+                "This transcript covers specific plants, one at a time or in sections.\n"
+                "1. As you read through the transcript, IDENTIFY which plant is being discussed in each section.\n"
+                "   Plants are typically announced at the start of each section or mentioned repeatedly.\n"
+                "2. Every visual_description MUST name the SPECIFIC plant being discussed — NEVER use generic terms like 'a plant', 'the flower', 'vegetation'.\n"
+                "   GOOD: 'A lush Monstera Deliciosa with large fenestrated leaves catching dappled sunlight'\n"
+                "   GOOD: 'Close-up of a Snake Plant (Sansevieria) showing its distinctive upright sword-shaped leaves with yellow margins'\n"
+                "   BAD: 'A green plant in a pot' (too generic — which plant?)\n"
+                "   BAD: 'Beautiful flowers in a garden' (which flowers?)\n"
+                "3. When the narrator transitions to a NEW plant, all scenes in that section must show ONLY that new plant.\n"
+                "   Do NOT mix plants from different sections.\n"
+                "4. Include botanical details visible in the scene: leaf shape, flower color, growth habit, "
+                "stem texture, root structure — whatever the narrator is discussing.\n\n"
+                "SUBSCRIBE CALL-TO-ACTION DETECTION:\n"
+                "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action for the channel:\n"
+                "- Mark that scene with: \"is_subscribe_cta\": true\n"
+                "- The visual_description for CTA scenes will be overridden — just set it to 'subscribe call to action'\n"
+                "- CTA scenes should ALWAYS have has_subject: true\n"
+            )
+
         if scene_instructions:
             system_prompt += f"\n\nCHANNEL-SPECIFIC SCENE INSTRUCTIONS:\n{scene_instructions}\n"
 
@@ -1368,10 +1431,44 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
     
     if all_scenes and segments:
         logger.info(f"=== POST-PROCESSING: {len(all_scenes)} scenes from segment-anchored approach ===")
-        
+
         # Sort scenes by start_time to ensure correct order
         all_scenes.sort(key=lambda s: s['start_time'])
-        
+
+        # ANTI-DRIFT: Snap every scene boundary to the nearest transcript segment boundary.
+        # This prevents scenes from drifting away from what the narrator is actually saying.
+        seg_starts = sorted(set(s['start'] for s in segments))
+        seg_ends = sorted(set(s['end'] for s in segments))
+        seg_boundaries = sorted(set(seg_starts + seg_ends))
+
+        def snap_to_boundary(t, boundaries):
+            """Snap a timestamp to the nearest segment boundary."""
+            if not boundaries:
+                return t
+            idx = bisect.bisect_left(boundaries, t)
+            candidates = []
+            if idx > 0:
+                candidates.append(boundaries[idx - 1])
+            if idx < len(boundaries):
+                candidates.append(boundaries[idx])
+            return min(candidates, key=lambda b: abs(b - t))
+
+        snap_fixes = 0
+        for scene in all_scenes:
+            snapped_start = snap_to_boundary(scene['start_time'], seg_boundaries)
+            snapped_end = snap_to_boundary(scene['end_time'], seg_boundaries)
+            if snapped_start != scene['start_time'] or snapped_end != scene['end_time']:
+                snap_fixes += 1
+            # Only snap if it doesn't create a zero/negative duration
+            if snapped_end > snapped_start:
+                scene['start_time'] = snapped_start
+                scene['end_time'] = snapped_end
+        if snap_fixes:
+            logger.info(f"Snapped {snap_fixes} scene boundaries to transcript segments (anti-drift)")
+
+        # Re-sort after snapping
+        all_scenes.sort(key=lambda s: s['start_time'])
+
         # Enforce continuity: each scene starts where the previous ends (no gaps)
         # Scenes already have segment-derived timestamps, just close small gaps
         gap_fixes = 0
@@ -2514,81 +2611,97 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir, prepend_silenc
     return output_path, insert_points
 
 
-def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
-    """Create a video from a still image with optional smooth Ken Burns effect.
-    
-    Uses scale + crop with frame counter (n) for smooth movement on looped images.
-    Zoom rate is 0.5% per second, capped at 15%.
+def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
+    """Create a video from a still image using PIL frame-by-frame rendering for smooth Ken Burns.
+
+    Renders each frame with Pillow for sub-pixel smooth motion, then encodes with ffmpeg.
+    Falls back to ffmpeg-only approach on failure.
     """
+    from PIL import Image as PILImage
+    FPS = 25
+    OUTPUT_W, OUTPUT_H = 1920, 1080
+    frames = max(int(duration * FPS), FPS)
+
+    if effect == 'rotate_pulse':
+        effects_cycle = ['pan_right', 'zoom_in', 'zoom_out']
+        actual_effect = effects_cycle[scene_index % 3]
+    elif effect in ('zoom_in', 'zoom_out', 'pan_right'):
+        actual_effect = effect
+    else:
+        actual_effect = 'none'
+
     try:
-        if effect == 'rotate_pulse':
-            effects_cycle = ['pan_right', 'zoom_in', 'zoom_out']
-            actual_effect = effects_cycle[scene_index % 3]
-        elif effect == 'zoom_in':
-            actual_effect = 'zoom_in'
-        else:
-            actual_effect = 'none'
-        
-        frames = max(int(duration * 25), 25)
-        
+        img = PILImage.open(image_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
         if actual_effect != 'none':
-            # Pre-scale image to 110% with PIL so we have room to crop
-            from PIL import Image as PILImage
-            img = PILImage.open(image_path)
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            scaled_w, scaled_h = 2112, 1188  # 1920*1.1, 1080*1.1
+            # Upscale to 110% so we have room to crop/pan
+            SCALE = 1.10
+            scaled_w = int(OUTPUT_W * SCALE)
+            scaled_h = int(OUTPUT_H * SCALE)
             img = img.resize((scaled_w, scaled_h), PILImage.LANCZOS)
-            oversized_path = image_path.replace('.png', '_oversized.png')
-            img.save(oversized_path, 'PNG')
-            
-            # Pixels to move across the full duration
-            extra_w = scaled_w - 1920  # 192 pixels
-            extra_h = scaled_h - 1080  # 108 pixels
-            
-            if actual_effect == 'zoom_in':
-                # Start showing full oversized, end cropped to centre
-                # crop width shrinks from scaled_w to 1920 over frames
-                vf = (f"crop='trunc(({scaled_w}-({extra_w}*n/{frames}))/2)*2:"
-                      f"trunc(({scaled_h}-({extra_h}*n/{frames}))/2)*2:"
-                      f"trunc(({extra_w}*n/{frames})/4)*2:"
-                      f"trunc(({extra_h}*n/{frames})/4)*2',"
-                      f"scale=1920:1080")
-            elif actual_effect == 'zoom_out':
-                # Start cropped tight at centre, end showing full oversized
-                vf = (f"crop='trunc((1920+({extra_w}*n/{frames}))/2)*2:"
-                      f"trunc((1080+({extra_h}*n/{frames}))/2)*2:"
-                      f"trunc(({extra_w}-{extra_w}*n/{frames})/4)*2:"
-                      f"trunc(({extra_h}-{extra_h}*n/{frames})/4)*2',"
-                      f"scale=1920:1080")
-            elif actual_effect == 'pan_right':
-                # Fixed crop size, x position moves left to right
-                vf = (f"crop=1920:1080:"
-                      f"trunc(({extra_w}*n/{frames})/2)*2:"
-                      f"trunc({extra_h}/4)*2,"
-                      f"scale=1920:1080")
-            
-            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', oversized_path,
-                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
-                   '-pix_fmt', 'yuv420p',
-                   '-vf', vf,
-                   '-r', '25', video_path]
+
+            # Write individual frames to a temp dir, then encode with ffmpeg
+            frame_dir = video_path.replace('.mp4', '_frames')
+            os.makedirs(frame_dir, exist_ok=True)
+
+            for f_idx in range(frames):
+                t = f_idx / max(frames - 1, 1)  # 0.0 → 1.0
+
+                if actual_effect == 'zoom_in':
+                    # Start full, end cropped to center
+                    crop_w = scaled_w - int((scaled_w - OUTPUT_W) * t)
+                    crop_h = scaled_h - int((scaled_h - OUTPUT_H) * t)
+                    x = (scaled_w - crop_w) // 2
+                    y = (scaled_h - crop_h) // 2
+                elif actual_effect == 'zoom_out':
+                    # Start cropped, end full
+                    crop_w = OUTPUT_W + int((scaled_w - OUTPUT_W) * t)
+                    crop_h = OUTPUT_H + int((scaled_h - OUTPUT_H) * t)
+                    x = (scaled_w - crop_w) // 2
+                    y = (scaled_h - crop_h) // 2
+                elif actual_effect == 'pan_right':
+                    crop_w = OUTPUT_W
+                    crop_h = OUTPUT_H
+                    x = int((scaled_w - OUTPUT_W) * t)
+                    y = (scaled_h - OUTPUT_H) // 2
+
+                frame = img.crop((x, y, x + crop_w, y + crop_h))
+                frame = frame.resize((OUTPUT_W, OUTPUT_H), PILImage.LANCZOS)
+                frame.save(os.path.join(frame_dir, f'frame_{f_idx:05d}.png'), 'PNG')
+
+            # Encode frames to video with ffmpeg
+            cmd = ['ffmpeg', '-y', '-framerate', str(FPS),
+                   '-i', os.path.join(frame_dir, 'frame_%05d.png'),
+                   '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
+                   '-pix_fmt', 'yuv420p', '-r', str(FPS), video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-            # Clean up oversized image
+
+            # Clean up frame directory
             try:
-                os.remove(oversized_path)
-            except:
+                shutil.rmtree(frame_dir)
+            except Exception:
                 pass
         else:
-            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
+            # No effect — static image, just use ffmpeg directly
+            img_resized = img.resize((OUTPUT_W, OUTPUT_H), PILImage.LANCZOS)
+            static_path = image_path.replace('.png', '_static.png')
+            img_resized.save(static_path, 'PNG')
+            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', static_path,
                    '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
                    '-pix_fmt', 'yuv420p',
-                   '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-                   '-r', '25', video_path]
+                   '-vf', f'scale={OUTPUT_W}:{OUTPUT_H}',
+                   '-r', str(FPS), video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+            try:
+                os.remove(static_path)
+            except Exception:
+                pass
+
     except Exception as e:
-        logger.error(f"Video from image failed: {e}")
-        # Fallback to static if effects fail
+        logger.error(f"PIL video from image failed: {e}")
+        # Fallback to simple ffmpeg static
         try:
             cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
                    '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
@@ -2598,6 +2711,15 @@ def create_video_from_image(image_path, video_path, duration, effect='none', sce
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         except Exception as e2:
             logger.error(f"Static fallback also failed: {e2}")
+
+
+def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
+    """Create a video from a still image with optional smooth Ken Burns effect.
+
+    Routes to PIL frame-by-frame renderer for smooth sub-pixel motion,
+    or ffmpeg-only for static (no effect) scenes.
+    """
+    create_video_from_image_pil(image_path, video_path, duration, effect=effect, scene_index=scene_index)
 
 
 def compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=None):
@@ -3159,6 +3281,21 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             scene_has_subject = scene.get('has_subject', False) and has_subject
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             prompt = scene['visual_description']
+
+            # Subscribe CTA scenes: override prompt with subject pointing at subscribe button
+            if scene.get('is_subscribe_cta'):
+                prompt = (
+                    "A simple, clean image with a plain white background. "
+                    "The main character is standing to one side, enthusiastically pointing "
+                    "with one hand toward a large, floating YouTube subscribe button. "
+                    "The subscribe button is red with white text reading 'SUBSCRIBE', "
+                    "hovering in the air next to the character. "
+                    "The character's other hand gives a thumbs up. "
+                    "Clean minimal composition, bright and inviting."
+                )
+                scene_has_subject = True  # Always include subject for CTA
+                logger.info(f"Scene {scene_num}: Subscribe CTA — using override prompt")
+
             # Content safety: sanitize unsafe terms for pregnancy/medical channels
             if topic_title_cards_enabled:
                 import re
