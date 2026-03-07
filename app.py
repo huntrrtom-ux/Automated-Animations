@@ -3006,15 +3006,13 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir, prepend_silenc
 
 
 def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
-    """Create a video from a still image using PIL frame-by-frame rendering for smooth Ken Burns.
+    """Create a video from a still image with optional Ken Burns effect using ffmpeg.
 
-    Renders each frame with Pillow for sub-pixel smooth motion, then encodes with ffmpeg.
-    Falls back to ffmpeg-only approach on failure.
+    Uses ffmpeg's zoompan filter for smooth Ken Burns motion (no temp frames).
+    Falls back to static image on failure.
     """
-    from PIL import Image as PILImage
     FPS = 25
     OUTPUT_W, OUTPUT_H = 1920, 1080
-    frames = max(int(duration * FPS), FPS)
 
     if effect == 'rotate_pulse':
         effects_cycle = ['pan_right', 'zoom_in', 'zoom_out']
@@ -3025,76 +3023,35 @@ def create_video_from_image_pil(image_path, video_path, duration, effect='none',
         actual_effect = 'none'
 
     try:
-        img = PILImage.open(image_path)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-
         if actual_effect != 'none':
-            # Upscale to 110% so we have room to crop/pan
-            SCALE = 1.10
-            scaled_w = int(OUTPUT_W * SCALE)
-            scaled_h = int(OUTPUT_H * SCALE)
-            img = img.resize((scaled_w, scaled_h), PILImage.LANCZOS)
+            # Use ffmpeg zoompan filter for smooth Ken Burns (no temp frames needed)
+            total_frames = max(int(duration * FPS), FPS)
+            if actual_effect == 'zoom_in':
+                # Start at full view (z=1.0), end at 1.1x zoom into center
+                zp = f"zoompan=z='1+0.1*on/{total_frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={OUTPUT_W}x{OUTPUT_H}:fps={FPS}"
+            elif actual_effect == 'zoom_out':
+                # Start at 1.1x zoom, end at full view
+                zp = f"zoompan=z='1.1-0.1*on/{total_frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={OUTPUT_W}x{OUTPUT_H}:fps={FPS}"
+            elif actual_effect == 'pan_right':
+                # Pan from left to right at constant zoom
+                zp = f"zoompan=z='1.1':x='(iw-iw/zoom)*on/{total_frames}':y='ih/2-(ih/zoom/2)':d={total_frames}:s={OUTPUT_W}x{OUTPUT_H}:fps={FPS}"
 
-            # Write individual frames to a temp dir, then encode with ffmpeg
-            frame_dir = video_path.replace('.mp4', '_frames')
-            os.makedirs(frame_dir, exist_ok=True)
-
-            for f_idx in range(frames):
-                t = f_idx / max(frames - 1, 1)  # 0.0 → 1.0
-
-                if actual_effect == 'zoom_in':
-                    # Start full, end cropped to center
-                    crop_w = scaled_w - int((scaled_w - OUTPUT_W) * t)
-                    crop_h = scaled_h - int((scaled_h - OUTPUT_H) * t)
-                    x = (scaled_w - crop_w) // 2
-                    y = (scaled_h - crop_h) // 2
-                elif actual_effect == 'zoom_out':
-                    # Start cropped, end full
-                    crop_w = OUTPUT_W + int((scaled_w - OUTPUT_W) * t)
-                    crop_h = OUTPUT_H + int((scaled_h - OUTPUT_H) * t)
-                    x = (scaled_w - crop_w) // 2
-                    y = (scaled_h - crop_h) // 2
-                elif actual_effect == 'pan_right':
-                    crop_w = OUTPUT_W
-                    crop_h = OUTPUT_H
-                    x = int((scaled_w - OUTPUT_W) * t)
-                    y = (scaled_h - OUTPUT_H) // 2
-
-                frame = img.crop((x, y, x + crop_w, y + crop_h))
-                frame = frame.resize((OUTPUT_W, OUTPUT_H), PILImage.LANCZOS)
-                frame.save(os.path.join(frame_dir, f'frame_{f_idx:05d}.png'), 'PNG')
-
-            # Encode frames to video with ffmpeg
-            cmd = ['ffmpeg', '-y', '-framerate', str(FPS),
-                   '-i', os.path.join(frame_dir, 'frame_%05d.png'),
+            cmd = ['ffmpeg', '-y', '-i', image_path,
+                   '-vf', zp,
                    '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M',
-                   '-pix_fmt', 'yuv420p', '-r', str(FPS), video_path]
-            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-
-            # Clean up frame directory
-            try:
-                shutil.rmtree(frame_dir)
-            except Exception:
-                pass
+                   '-pix_fmt', 'yuv420p', '-t', str(duration), video_path]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         else:
             # No effect — static image, just use ffmpeg directly
-            img_resized = img.resize((OUTPUT_W, OUTPUT_H), PILImage.LANCZOS)
-            static_path = image_path.replace('.png', '_static.png')
-            img_resized.save(static_path, 'PNG')
-            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', static_path,
+            cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
                    '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-t', str(duration),
                    '-pix_fmt', 'yuv420p',
-                   '-vf', f'scale={OUTPUT_W}:{OUTPUT_H}',
+                   '-vf', f'scale={OUTPUT_W}:{OUTPUT_H}:force_original_aspect_ratio=increase,crop={OUTPUT_W}:{OUTPUT_H}',
                    '-r', str(FPS), video_path]
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
-            try:
-                os.remove(static_path)
-            except Exception:
-                pass
 
     except Exception as e:
-        logger.error(f"PIL video from image failed: {e}")
+        logger.error(f"Video from image failed: {e}")
         # Fallback to simple ffmpeg static
         try:
             cmd = ['ffmpeg', '-y', '-loop', '1', '-i', image_path,
