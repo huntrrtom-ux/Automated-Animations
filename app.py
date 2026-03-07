@@ -141,7 +141,7 @@ BASE_FORMATS = {
     'botanical': {
         'base': 'botanical',
         'label': 'Botanical',
-        'description': 'Plant-focused educational with subject character',
+        'description': 'Plant-focused educational',
         'intro_duration': 30,
         'intro_animated': False,
         'intro_scene_min_duration': 2,
@@ -152,7 +152,7 @@ BASE_FORMATS = {
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
         'ken_burns_effect': 'zoom_in',
-        'subject_mode': 'botanical',
+        'subject_mode': 'none',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
@@ -1208,6 +1208,9 @@ def get_format_subject_rules(format_config, has_subject):
     subject_mode = format_config.get('subject_mode', 'auto')
     subject_interval = format_config.get('subject_interval', 300)
 
+    if subject_mode == 'none':
+        return ""
+
     if subject_mode == 'all':
         return (
             "\n\nMAIN CHARACTER (SUBJECT REFERENCE):\n"
@@ -1436,7 +1439,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
             )
         # Botanical format: plant identification + subscribe CTA detection
-        if format_config.get('subject_mode') == 'botanical':
+        if format_config.get('base') in ('botanical', 'botanical-pov-character'):
             system_prompt += (
                 "\n\nPLANT IDENTIFICATION (CRITICAL FOR BOTANICAL FORMAT):\n"
                 "This transcript covers specific plants, one at a time or in sections.\n"
