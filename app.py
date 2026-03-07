@@ -835,8 +835,8 @@ def migrate_plants_explainer_channel():
     channel_id = save_channel(
         name='Plants Explainer',
         base_format='botanical',
-        tags='Plants,Education',
-        tag_colors={'Plants': '#2d8a4e', 'Education': '#4a90d9'},
+        tags='',
+        tag_colors={},
         scene_instructions=(
             "This channel covers specific plants in educational segments. "
             "Each section of the transcript discusses a particular plant — identify it from context "
@@ -903,8 +903,8 @@ def migrate_tv_show_pov_channel():
     channel_id = save_channel(
         name='TV Show POV',
         base_format='tv-show-pov',
-        tags='TV Show,POV,Character',
-        tag_colors={'TV Show': '#e6553a', 'POV': '#8b5cf6', 'Character': '#d97706'},
+        tags='',
+        tag_colors={},
         scene_instructions=(
             "This is a TV-show-style narration with a single persistent POV character. "
             "The character must appear in EVERY scene — they are the protagonist. "
@@ -928,7 +928,7 @@ def migrate_tv_show_pov_channel():
         cfg = json.load(f)
 
     fmt = cfg['format']
-    fmt['label'] = 'Botanical – POV Character'
+    fmt['label'] = 'TV Show POV'
     fmt['description'] = 'PIL frame-by-frame with persistent POV character'
     cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
 
@@ -1246,7 +1246,9 @@ def get_format_subject_rules(format_config, has_subject):
         return (
             "\n\nMAIN CHARACTER (POV CHARACTER — CRITICAL):\n"
             "A character reference image has been uploaded. This character is the PROTAGONIST of the video.\n"
-            "- The character MUST appear in EVERY scene — set has_subject: true for ALL scenes, no exceptions\n"
+            "- The character should appear in roughly 80% of all scenes — set has_subject: true for ~80% of scenes\n"
+            "- Set has_subject: false for ~20% of scenes — pure establishing shots, object close-ups, "
+            "or environmental scenes that benefit from showing the world without the character\n"
             "- CHARACTER CONSISTENCY: The character's core appearance (face, body type, hair) must stay "
             "IDENTICAL across all scenes. You may make MINOR natural tweaks (e.g. sleeves rolled up, hair "
             "slightly windswept) but NEVER change defining features like hair color, build, or facial structure.\n"
@@ -1255,10 +1257,13 @@ def get_format_subject_rules(format_config, has_subject):
             "  If modern/contemporary — use normal modern attire (casual, business, sportswear, etc.)\n"
             "  If futuristic/sci-fi — use appropriate futuristic clothing\n"
             "  The attire should match the SITUATION too (a character in a lab wears a lab coat, etc.)\n"
-            "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
-            "  GOOD: 'standing in a dimly lit medieval tavern, leaning forward over a wooden table with a suspicious expression'\n"
-            "  GOOD: 'crouching behind a wall in modern tactical gear, peering around the corner with focused intensity'\n"
+            "- When has_subject is true, describe the character's BODY LANGUAGE and ACTION only:\n"
+            "  GOOD: 'standing in a dimly lit medieval tavern, leaning forward over a wooden table, gripping the edge'\n"
+            "  GOOD: 'crouching behind a wall in modern tactical gear, peering around the corner with rifle raised'\n"
+            "  BAD: 'smiling warmly with a joyful expression' (NO facial emotion descriptions)\n"
             "  BAD: 'the main character appears' (too vague)\n"
+            "- NEVER describe facial expressions, emotions, or face details — focus ONLY on "
+            "body position, hand actions, posture, and interaction with the environment\n"
             "- The character should feel like the LEAD of a TV show — always present, always in the action\n"
         )
     elif subject_mode == 'sparse':
