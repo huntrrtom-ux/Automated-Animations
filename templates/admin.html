@@ -177,6 +177,10 @@
                         <label class="ef-label">Image Instructions <span class="ef-optional">(prepended to every image prompt)</span></label>
                         <textarea id="edit-image-instructions" class="text-input" rows="2" placeholder="e.g. Use warm golden-hour lighting..." style="resize:vertical"></textarea>
                     </div>
+                    <div class="ef-field">
+                        <label class="ef-label">Character Instructions <span class="ef-optional">(per-video override available at generation time)</span></label>
+                        <textarea id="edit-character-instructions" class="text-input" rows="2" placeholder="e.g. Male, mid-30s, rugged, wearing a leather jacket..." style="resize:vertical"></textarea>
+                    </div>
                     <div class="ef-actions">
                         <button class="btn btn-ghost btn-sm" id="edit-ch-cancel">Cancel</button>
                         <button class="btn btn-ghost btn-sm" id="edit-ch-delete" style="color:var(--error)">Delete</button>
@@ -463,6 +467,7 @@
             document.getElementById('edit-style-text').value = ch.style_text || '';
             document.getElementById('edit-scene-instructions').value = ch.scene_instructions || '';
             document.getElementById('edit-image-instructions').value = ch.image_instructions || '';
+            document.getElementById('edit-character-instructions').value = ch.character_instructions || '';
 
             // Tags
             editTags = ch.tags || [];
@@ -504,6 +509,7 @@
             formData.append('style_text', document.getElementById('edit-style-text').value.trim());
             formData.append('scene_instructions', document.getElementById('edit-scene-instructions').value.trim());
             formData.append('image_instructions', document.getElementById('edit-image-instructions').value.trim());
+            formData.append('character_instructions', document.getElementById('edit-character-instructions').value.trim());
             formData.append('tags', editTags.join(','));
             formData.append('tag_colors', JSON.stringify(editTagColors));
 

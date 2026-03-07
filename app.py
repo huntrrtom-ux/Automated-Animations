@@ -157,6 +157,25 @@ BASE_FORMATS = {
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
     },
+    'botanical-pov-character': {
+        'base': 'botanical-pov-character',
+        'label': 'Botanical – POV Character',
+        'description': 'PIL frame-by-frame with persistent POV character',
+        'intro_duration': 30,
+        'intro_animated': False,
+        'intro_scene_min_duration': 2,
+        'intro_scene_max_duration': 8,
+        'body_scene_min_duration': 2,
+        'body_scene_max_duration': 8,
+        'body_animated': False,
+        'periodic_animation_interval': 0,
+        'periodic_animation_window': 0,
+        'ken_burns_effect': 'zoom_in',
+        'subject_mode': 'pov',
+        'subject_interval': 0,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 8,
+    },
 }
 
 
@@ -240,7 +259,8 @@ def _resize_logo(path, size=800):
 
 
 def save_channel(name, base_format='pulse', style_data=None, subject_data=None, logo_data=None,
-                 style_text='', tags='', tag_colors=None, scene_instructions='', image_instructions=''):
+                 style_text='', tags='', tag_colors=None, scene_instructions='', image_instructions='',
+                 character_instructions=''):
     channel_id = 'ch_' + str(uuid.uuid4())[:8]
     channel_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
     os.makedirs(channel_dir, exist_ok=True)
@@ -264,6 +284,7 @@ def save_channel(name, base_format='pulse', style_data=None, subject_data=None, 
         'style_text': style_text,
         'scene_instructions': scene_instructions,
         'image_instructions': image_instructions,
+        'character_instructions': character_instructions,
         'format': format_config,
         'has_style_image': style_data is not None,
         'has_subject': subject_data is not None,
@@ -284,7 +305,7 @@ def update_channel(channel_id, **fields):
         return False
     with open(config_path, 'r') as f:
         config = json.load(f)
-    for key in ['name', 'tags', 'tag_colors', 'style_text', 'scene_instructions', 'image_instructions']:
+    for key in ['name', 'tags', 'tag_colors', 'style_text', 'scene_instructions', 'image_instructions', 'character_instructions']:
         if key in fields and fields[key] is not None:
             config[key] = fields[key]
     if 'format' in fields and fields['format'] is not None:
@@ -853,6 +874,76 @@ def migrate_plants_explainer_channel():
 migrate_plants_explainer_channel()
 
 
+def migrate_tv_show_pov_channel():
+    """One-time migration: create TV Show POV channel with botanical-pov-character format."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_tv_show_pov.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== TV SHOW POV MIGRATION: Creating channel ===")
+
+    # Check if channel already exists by name
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                if cfg.get('name') == 'TV Show POV':
+                    logger.info("  'TV Show POV' already exists — skipping creation")
+                    with open(flag_path, 'w') as f:
+                        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+                    return
+            except Exception:
+                pass
+
+    channel_id = save_channel(
+        name='TV Show POV',
+        base_format='botanical-pov-character',
+        tags='TV Show,POV,Character',
+        tag_colors={'TV Show': '#e6553a', 'POV': '#8b5cf6', 'Character': '#d97706'},
+        scene_instructions=(
+            "This is a TV-show-style narration with a single persistent POV character. "
+            "The character must appear in EVERY scene — they are the protagonist. "
+            "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
+            "and ensure ALL scenes reflect that era consistently. "
+            "Vary camera angles: wide establishing shots with character visible, medium shots of character "
+            "interacting with the environment, and close-ups of character reactions."
+        ),
+        image_instructions=(
+            "Cinematic TV-show quality. Dramatic lighting, rich color grading, depth of field. "
+            "The POV character must be visually consistent across all frames — same face, same build, "
+            "same core appearance. Attire should match the era and situation depicted in the transcript."
+        ),
+        character_instructions='',
+    )
+
+    # Patch format config
+    ch_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(ch_dir, 'config.json')
+    with open(config_path, 'r') as f:
+        cfg = json.load(f)
+
+    fmt = cfg['format']
+    fmt['label'] = 'Botanical – POV Character'
+    fmt['description'] = 'PIL frame-by-frame with persistent POV character'
+    cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    logger.info(f"  Created 'TV Show POV' as {channel_id} with botanical-pov-character format")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== TV SHOW POV MIGRATION COMPLETE ===")
+
+migrate_tv_show_pov_channel()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
@@ -1151,6 +1242,25 @@ def get_format_subject_rules(format_config, has_subject):
             "body position, hand actions, posture, and interaction with plants/environment\n"
             "- The character should feel dynamic and purposeful — actively engaging with the plants\n"
         )
+    elif subject_mode == 'pov':
+        return (
+            "\n\nMAIN CHARACTER (POV CHARACTER — CRITICAL):\n"
+            "A character reference image has been uploaded. This character is the PROTAGONIST of the video.\n"
+            "- The character MUST appear in EVERY scene — set has_subject: true for ALL scenes, no exceptions\n"
+            "- CHARACTER CONSISTENCY: The character's core appearance (face, body type, hair) must stay "
+            "IDENTICAL across all scenes. You may make MINOR natural tweaks (e.g. sleeves rolled up, hair "
+            "slightly windswept) but NEVER change defining features like hair color, build, or facial structure.\n"
+            "- ERA-APPROPRIATE ATTIRE: Detect the time period from the transcript content.\n"
+            "  If medieval/historical — dress the character in period-accurate clothing (tunics, armor, robes, etc.)\n"
+            "  If modern/contemporary — use normal modern attire (casual, business, sportswear, etc.)\n"
+            "  If futuristic/sci-fi — use appropriate futuristic clothing\n"
+            "  The attire should match the SITUATION too (a character in a lab wears a lab coat, etc.)\n"
+            "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
+            "  GOOD: 'standing in a dimly lit medieval tavern, leaning forward over a wooden table with a suspicious expression'\n"
+            "  GOOD: 'crouching behind a wall in modern tactical gear, peering around the corner with focused intensity'\n"
+            "  BAD: 'the main character appears' (too vague)\n"
+            "- The character should feel like the LEAD of a TV show — always present, always in the action\n"
+        )
     elif subject_mode == 'sparse':
         interval_min = max(1, subject_interval // 60)
         return (
@@ -1180,7 +1290,7 @@ def get_format_subject_rules(format_config, has_subject):
             "- When in doubt, set has_subject: true\n"
         )
 
-def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions='', chapters=None):
+def detect_scene_changes(transcript_data, session_id, has_subject=False, format_config=None, audio_duration=0, scene_instructions='', chapters=None, character_instructions=''):
     emit_progress(session_id, 'scene_detection', 16, 'Analyzing script...')
     # Use Gemini via OpenAI-compatible endpoint (cheaper + higher rate limits)
     if GEMINI_API_KEY:
@@ -1350,6 +1460,14 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
 
         if scene_instructions:
             system_prompt += f"\n\nCHANNEL-SPECIFIC SCENE INSTRUCTIONS:\n{scene_instructions}\n"
+
+        if character_instructions:
+            system_prompt += (
+                f"\n\nCHARACTER-SPECIFIC INSTRUCTIONS:\n"
+                f"The following describes the main character in detail. Use this to inform how you describe "
+                f"them in visual_description fields. These details MUST persist across ALL scenes:\n"
+                f"{character_instructions}\n"
+            )
 
         user_msg = (
             f"Total audio duration: {audio_duration:.1f} seconds\n"
@@ -2897,7 +3015,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, channel_id=None, project_title='', device_id='unknown'):
+def process_voiceover(filepath, session_id, channel_id=None, project_title='', device_id='unknown', character_instructions=''):
     # Track this session as active
     with _active_sessions_lock:
         active_sessions[session_id] = {
@@ -2936,11 +3054,16 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 transcript_data = transcribe_audio(filepath, session_id)
         else:
             transcript_data = transcribe_audio(filepath, session_id)
+        # Resolve character instructions: per-video override > channel default
+        resolved_char_instructions = character_instructions or (
+            channel_config.get('character_instructions', '') if channel_config else ''
+        )
         scenes = detect_scene_changes(
             transcript_data, session_id, has_subject,
             format_config=format_config, audio_duration=audio_duration,
             scene_instructions=channel_config.get('scene_instructions', '') if channel_config else '',
-            chapters=transcript_data.get('chapters')
+            chapters=transcript_data.get('chapters'),
+            character_instructions=resolved_char_instructions
         )
 
         with open(os.path.join(work_dir, 'scenes.json'), 'w') as f:
@@ -3947,6 +4070,7 @@ def upload_audio():
         return jsonify({'error': 'Invalid file'}), 400
     channel_id = request.form.get('channel_id', '') or request.form.get('preset_id', '')
     project_title = request.form.get('project_title', '').strip()
+    character_instructions = request.form.get('character_instructions', '').strip()
     session_id = str(uuid.uuid4())[:12]
     # Build a device fingerprint from IP + User-Agent
     raw_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
@@ -3956,7 +4080,7 @@ def upload_audio():
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id)
+    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id, character_instructions)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/download/<session_id>/<filename>')
@@ -4304,6 +4428,9 @@ def update_channel_route(channel_id):
     image_instructions = request.form.get('image_instructions')
     if image_instructions is not None:
         fields['image_instructions'] = image_instructions
+    character_instructions = request.form.get('character_instructions')
+    if character_instructions is not None:
+        fields['character_instructions'] = character_instructions
     tags = request.form.get('tags')
     if tags is not None:
         fields['tags'] = [t.strip() for t in tags.split(',') if t.strip()] if tags else []

@@ -166,6 +166,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('file-input').value = '';
         document.getElementById('file-selected').classList.add('hidden');
         document.getElementById('project-title').value = '';
+        document.getElementById('character-instructions').value = '';
+        document.getElementById('character-instructions-group').classList.add('hidden');
         document.title = 'Hunter Motions';
         goToStep('channel');
     });
@@ -364,6 +366,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="summary-value"${ch.has_subject ? ' style="color:var(--success)"' : ''}>${ch.has_subject ? '\u2713 Yes' : '\u2717 No'}</span>
             </div>
         `;
+
+        // Show character instructions field for channels with a subject
+        const charGroup = document.getElementById('character-instructions-group');
+        if (ch.has_subject) {
+            charGroup.classList.remove('hidden');
+            // Pre-fill with channel default if no per-video override typed yet
+            const charInput = document.getElementById('character-instructions');
+            if (!charInput.value.trim() && ch.character_instructions) {
+                charInput.value = ch.character_instructions;
+            }
+        } else {
+            charGroup.classList.add('hidden');
+        }
     }
 
     browseBtn.addEventListener('click', (e) => { e.stopPropagation(); fileInput.click(); });
@@ -433,6 +448,10 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('audio', selectedFile);
         formData.append('channel_id', selectedChannelId);
         formData.append('project_title', projectTitle);
+        const charInstructions = document.getElementById('character-instructions').value.trim();
+        if (charInstructions) {
+            formData.append('character_instructions', charInstructions);
+        }
 
         try {
             const resp = await fetch('/upload', { method: 'POST', body: formData });
