@@ -115,8 +115,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedChannelData && step !== 'home') {
             ctxBar.classList.remove('hidden');
             document.getElementById('ctx-name').textContent = selectedChannelData.name;
-            const formatBase = selectedChannelData.format ? selectedChannelData.format.base : 'pulse';
-            document.getElementById('ctx-format').textContent = formatBase.charAt(0).toUpperCase() + formatBase.slice(1);
+            const fmt = selectedChannelData.format || {};
+            const formatLabel = fmt.label || fmt.base || 'pulse';
+            document.getElementById('ctx-format').textContent = formatLabel;
             const logoImg = document.getElementById('ctx-logo');
             if (selectedChannelData.has_logo) {
                 logoImg.src = `/api/channels/${selectedChannelData.id}/logo.png`;
@@ -423,9 +424,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (selectedChannelData) {
             document.getElementById('confirm-channel').textContent = selectedChannelData.name;
-            const formatBase = selectedChannelData.format ? selectedChannelData.format.base : 'pulse';
+            const fmtObj = selectedChannelData.format || {};
+            const fmtBase = fmtObj.base || 'pulse';
+            const fmtLabel = fmtObj.label || fmtBase;
             const formatIcons = { pulse: '\u26A1 Pulse', flash: '\uD83C\uDF93 Flash', deep: '\uD83D\uDCDA Deep' };
-            document.getElementById('confirm-format').textContent = formatIcons[formatBase] || formatBase;
+            document.getElementById('confirm-format').textContent = formatIcons[fmtBase] || fmtLabel;
         }
         if (selectedFile) {
             document.getElementById('confirm-audio').textContent = `${selectedFile.name} (${formatSize(selectedFile.size)})`;

@@ -375,7 +375,7 @@
             }
             grid.innerHTML = adminChannelCache.map(ch => {
                 const hasLogo = ch.has_logo;
-                const formatBase = ch.format ? ch.format.base : 'pulse';
+                const formatBase = ch.format ? (ch.format.label || ch.format.base) : 'pulse';
                 const hasSubject = ch.has_subject;
                 let logoHtml = hasLogo
                     ? `<img class="admin-ch-logo" src="/api/channels/${ch.id}/logo.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="admin-ch-logo-ph" style="display:none">\uD83D\uDD27</div>`
