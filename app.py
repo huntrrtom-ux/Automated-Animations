@@ -182,7 +182,8 @@ BASE_FORMATS = {
         'body_animated': False,
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
-        'ken_burns_effect': 'none',
+        'ken_burns_effect': 'zoom_in',
+        'ken_burns_scale': 1.03,
         'subject_mode': 'botanical',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
@@ -1166,7 +1167,7 @@ def migrate_disable_ken_burns_botanical_tvshow():
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
             fmt = cfg.get('format', {})
-            if fmt.get('base') in ('botanical', 'tv-show-pov') and fmt.get('ken_burns_effect') != 'none':
+            if fmt.get('base') in ('tv-show-pov',) and fmt.get('ken_burns_effect') != 'none':
                 fmt['ken_burns_effect'] = 'none'
                 cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
                 with open(config_path, 'w') as f:
@@ -1699,7 +1700,14 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action for the channel:\n"
                 "- Mark that scene with: \"is_subscribe_cta\": true\n"
                 "- The visual_description for CTA scenes will be overridden — just set it to 'subscribe call to action'\n"
-                "- CTA scenes should ALWAYS have has_subject: true\n"
+                "- CTA scenes should ALWAYS have has_subject: true\n\n"
+                "HYPER-REALISTIC DETAIL SHOTS:\n"
+                "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
+                "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
+                "These should be scenes showing striking botanical detail — leaf texture, flower structure, "
+                "root systems, bark patterns, or seed pods.\n"
+                "Spread them out across the plant's section — do NOT cluster them together.\n"
+                "All other scenes remain without this field.\n"
             )
 
         if scene_instructions:
@@ -3041,7 +3049,7 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir, prepend_silenc
     return output_path, insert_points
 
 
-def _create_video_from_image_pil_blocking(image_path, video_path, duration, effect='none', scene_index=0):
+def _create_video_from_image_pil_blocking(image_path, video_path, duration, effect='none', scene_index=0, scale=1.10):
     """Create a video from a still image using PIL frame-by-frame rendering for smooth Ken Burns.
 
     Renders each frame with Pillow for sub-pixel smooth motion, then encodes with ffmpeg.
@@ -3067,8 +3075,7 @@ def _create_video_from_image_pil_blocking(image_path, video_path, duration, effe
             img = img.convert('RGB')
 
         if actual_effect != 'none':
-            # Upscale to 110% so we have room to crop/pan
-            SCALE = 1.10
+            SCALE = scale
             scaled_w = int(OUTPUT_W * SCALE)
             scaled_h = int(OUTPUT_H * SCALE)
             img = img.resize((scaled_w, scaled_h), PILImage.LANCZOS)
@@ -3142,22 +3149,22 @@ def _create_video_from_image_pil_blocking(image_path, video_path, duration, effe
             logger.error(f"Static fallback also failed: {e2}")
 
 
-def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
+def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0, scale=1.10):
     """Create video from image with optional Ken Burns effect.
 
     Runs directly in the greenlet context (not threadpool) so that gevent's
     monkey-patched subprocess can use child watchers on the default event loop.
     """
-    _create_video_from_image_pil_blocking(image_path, video_path, duration, effect, scene_index)
+    _create_video_from_image_pil_blocking(image_path, video_path, duration, effect, scene_index, scale=scale)
 
 
-def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
+def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0, scale=1.10):
     """Create a video from a still image with optional smooth Ken Burns effect.
 
     Routes to PIL frame-by-frame renderer for smooth sub-pixel motion,
     or ffmpeg-only for static (no effect) scenes.
     """
-    create_video_from_image_pil(image_path, video_path, duration, effect=effect, scene_index=scene_index)
+    create_video_from_image_pil(image_path, video_path, duration, effect=effect, scene_index=scene_index, scale=scale)
 
 
 def compose_final_video(scene_videos, audio_path, output_path, session_id, audio_duration=None):
@@ -3758,8 +3765,13 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 ]
                 for pattern, replacement in _unsafe:
                     prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
-            if image_instructions:
+            # Hyper-realistic override for botanical scenes (replaces illustration style)
+            if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+                prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
+            elif image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
+            if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
+                prompt = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {prompt}"
             result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
@@ -3816,6 +3828,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
 
                 logger.info(f"Retrying scene {scene_num} with rephrased prompt...")
                 rephrased = rephrase_prompt(scene['visual_description'])
+                if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+                    rephrased = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {rephrased}"
+                elif image_instructions:
+                    rephrased = f"{image_instructions}. {rephrased}"
+                if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
+                    rephrased = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {rephrased}"
                 result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                 
                 if result == "TOKEN_EXPIRED":
@@ -3879,7 +3897,14 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     logger.info(f"Regenerating image for scene {scene_num} before final animation attempt")
                     scene_has_subject = scene.get('has_subject', False) and has_subject
                     img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
-                    new_image = generate_image_whisk(scene['visual_description'], img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                    regen_prompt = scene['visual_description']
+                    if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+                        regen_prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {regen_prompt}"
+                    elif image_instructions:
+                        regen_prompt = f"{image_instructions}. {regen_prompt}"
+                    if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
+                        regen_prompt = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {regen_prompt}"
+                    new_image = generate_image_whisk(regen_prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                     if new_image in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
                         return idx, new_image, None
                     if new_image and isinstance(new_image, dict):
@@ -4002,16 +4027,16 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     logger.error(f"  All animation attempts FAILED — falling back to still image")
                     logger.error(f"=== END DIAGNOSTIC ===")
                     vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
-                    create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
+                    create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i, scale=format_config.get('ken_burns_scale', 1.10))
                     return i, vid
             elif is_video and (not image_results[i] or not isinstance(image_results[i], dict)):
                 logger.warning(f"Scene {scene_num} marked is_video=True but image_info invalid — falling back to still")
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
-                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
+                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i, scale=format_config.get('ken_burns_scale', 1.10))
                 return i, vid
             else:
                 vid = os.path.join(work_dir, f'scene_{scene_num:04d}_video.mp4')
-                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
+                create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i, scale=format_config.get('ken_burns_scale', 1.10))
                 return i, vid
 
         check_cancelled(session_id)
@@ -4077,6 +4102,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             'format_config': format_config,
             'has_subject': has_subject,
             'project_title': project_title,
+            'character_instructions': resolved_char_instructions,
             # Backward compat fields for older regeneration code
             'preset_id': channel_id,
             'video_format': format_config.get('base', 'pulse')
@@ -4457,6 +4483,15 @@ def regenerate_scene():
 
     # Regenerate image
     logger.info(f"Regenerating scene {scene_num} for session {session_id}")
+    character_instructions = state.get('character_instructions', '')
+    video_format = state.get('video_format', 'pulse')
+    image_instructions = format_config.get('image_instructions', '')
+    if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+        prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
+    elif image_instructions:
+        prompt = f"{image_instructions}. {prompt}"
+    if scene_has_subject and character_instructions and video_format == 'tv-show-pov':
+        prompt = f"CHARACTER APPEARANCE: {character_instructions}. {prompt}"
     socketio.emit('regen_progress', {'session_id': session_id, 'progress': 15, 'message': 'Generating image...'})
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
@@ -4493,10 +4528,10 @@ def regenerate_scene():
             subprocess.run(cmd, check=True, capture_output=True, timeout=120)
             vid_path = trimmed
         else:
-            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx, scale=format_config.get('ken_burns_scale', 1.10))
     else:
-        create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
-    
+        create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx, scale=format_config.get('ken_burns_scale', 1.10))
+
     # Update scene_videos list
     scene_videos[scene_idx] = vid_path
     
@@ -4595,6 +4630,16 @@ def regenerate_batch():
         scene_has_subject = scene.get('has_subject', False) and has_subject
         img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
 
+        character_instructions = state.get('character_instructions', '')
+        batch_video_format = state.get('video_format', 'pulse')
+        batch_image_instructions = format_config.get('image_instructions', '')
+        if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+            prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
+        elif batch_image_instructions:
+            prompt = f"{batch_image_instructions}. {prompt}"
+        if scene_has_subject and character_instructions and batch_video_format == 'tv-show-pov':
+            prompt = f"CHARACTER APPEARANCE: {character_instructions}. {prompt}"
+
         logger.info(f"Batch regen: generating image for scene {scene_num}")
         result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
@@ -4629,10 +4674,10 @@ def regenerate_batch():
                 subprocess.run(cmd, check=True, capture_output=True, timeout=120)
                 vid_path = trimmed
             else:
-                create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
+                create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx, scale=format_config.get('ken_burns_scale', 1.10))
         else:
-            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx)
-        
+            create_video_from_image(img_path, vid_path, duration, effect=scene_effect, scene_index=scene_idx, scale=format_config.get('ken_burns_scale', 1.10))
+
         scene_videos[scene_idx] = vid_path
         results.append({'scene_number': scene_num, 'success': True})
         logger.info(f"Batch regen: scene {scene_num} done ({len(results)}/{len(scene_numbers)})")
