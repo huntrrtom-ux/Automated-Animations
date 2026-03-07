@@ -367,9 +367,10 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        // Show character instructions field for channels with a subject
+        // Show character instructions field only for POV formats
         const charGroup = document.getElementById('character-instructions-group');
-        if (ch.has_subject) {
+        const subjectMode = ch.format ? ch.format.subject_mode : '';
+        if (ch.has_subject && subjectMode === 'pov') {
             charGroup.classList.remove('hidden');
             // Pre-fill with channel default if no per-video override typed yet
             const charInput = document.getElementById('character-instructions');

@@ -141,7 +141,7 @@ BASE_FORMATS = {
     'botanical': {
         'base': 'botanical',
         'label': 'Botanical',
-        'description': 'Plant-focused educational',
+        'description': 'Plant-focused educational with subject character',
         'intro_duration': 30,
         'intro_animated': False,
         'intro_scene_min_duration': 2,
@@ -152,7 +152,7 @@ BASE_FORMATS = {
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
         'ken_burns_effect': 'zoom_in',
-        'subject_mode': 'none',
+        'subject_mode': 'botanical',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
@@ -1207,9 +1207,6 @@ def get_format_subject_rules(format_config, has_subject):
 
     subject_mode = format_config.get('subject_mode', 'auto')
     subject_interval = format_config.get('subject_interval', 300)
-
-    if subject_mode == 'none':
-        return ""
 
     if subject_mode == 'all':
         return (
