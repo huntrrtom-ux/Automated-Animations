@@ -157,9 +157,9 @@ BASE_FORMATS = {
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
     },
-    'botanical-pov-character': {
-        'base': 'botanical-pov-character',
-        'label': 'Botanical – POV Character',
+    'tv-show-pov': {
+        'base': 'tv-show-pov',
+        'label': 'TV Show POV',
         'description': 'PIL frame-by-frame with persistent POV character',
         'intro_duration': 30,
         'intro_animated': False,
@@ -875,7 +875,7 @@ migrate_plants_explainer_channel()
 
 
 def migrate_tv_show_pov_channel():
-    """One-time migration: create TV Show POV channel with botanical-pov-character format."""
+    """One-time migration: create TV Show POV channel with tv-show-pov format."""
     flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_tv_show_pov.done')
     if os.path.exists(flag_path):
         return
@@ -902,7 +902,7 @@ def migrate_tv_show_pov_channel():
 
     channel_id = save_channel(
         name='TV Show POV',
-        base_format='botanical-pov-character',
+        base_format='tv-show-pov',
         tags='TV Show,POV,Character',
         tag_colors={'TV Show': '#e6553a', 'POV': '#8b5cf6', 'Character': '#d97706'},
         scene_instructions=(
@@ -935,7 +935,7 @@ def migrate_tv_show_pov_channel():
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
 
-    logger.info(f"  Created 'TV Show POV' as {channel_id} with botanical-pov-character format")
+    logger.info(f"  Created 'TV Show POV' as {channel_id} with tv-show-pov format")
 
     with open(flag_path, 'w') as f:
         f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -1436,7 +1436,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
             )
         # Botanical format: plant identification + subscribe CTA detection
-        if format_config.get('base') in ('botanical', 'botanical-pov-character'):
+        if format_config.get('base') == 'botanical':
             system_prompt += (
                 "\n\nPLANT IDENTIFICATION (CRITICAL FOR BOTANICAL FORMAT):\n"
                 "This transcript covers specific plants, one at a time or in sections.\n"
