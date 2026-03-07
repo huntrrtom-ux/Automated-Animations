@@ -1081,6 +1081,69 @@ def migrate_fix_tv_show_pov_scene_instructions():
 migrate_fix_tv_show_pov_scene_instructions()
 
 
+def migrate_fix_botanical_pov_character_base():
+    """One-time fix: channels still carrying the old 'botanical-pov-character' base
+    format need the base renamed to 'tv-show-pov', tags cleared, label/description
+    updated, and scene_instructions corrected.  Earlier migrations missed these
+    channels because they only matched base == 'tv-show-pov'."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'],
+                             '_migration_fix_botanical_pov_char_base.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') != 'botanical-pov-character':
+                continue
+
+            # --- Rename base format ---
+            fmt['base'] = 'tv-show-pov'
+            fmt['label'] = 'TV Show POV'
+            fmt['description'] = 'PIL frame-by-frame with persistent POV character'
+            # Copy over correct format settings from BASE_FORMATS
+            canonical = BASE_FORMATS.get('tv-show-pov')
+            if canonical:
+                for key in ('subject_mode', 'ken_burns_effect', 'intro_scene_duration',
+                            'min_scene_duration', 'max_scene_duration', 'animation_pattern'):
+                    if key in canonical:
+                        fmt[key] = canonical[key]
+
+            # --- Clear tags ---
+            cfg['tags'] = []
+            cfg['tag_colors'] = {}
+
+            # --- Fix scene instructions (EVERY -> 80%) ---
+            si = cfg.get('scene_instructions', '')
+            if 'must appear in EVERY scene' in si:
+                cfg['scene_instructions'] = si.replace(
+                    'The character must appear in EVERY scene — they are the protagonist.',
+                    'who should appear in roughly 80% of scenes — they are the protagonist.'
+                )
+
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(config_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            logger.info(f"  Fixed botanical-pov-character -> tv-show-pov in {name} "
+                        f"(base, label, tags, scene_instructions)")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== BOTANICAL-POV-CHARACTER BASE FIX COMPLETE ===")
+
+migrate_fix_botanical_pov_character_base()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
