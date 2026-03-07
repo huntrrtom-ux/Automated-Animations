@@ -182,7 +182,7 @@ BASE_FORMATS = {
         'body_animated': False,
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
-        'ken_burns_effect': 'zoom_in',
+        'ken_burns_effect': 'none',
         'subject_mode': 'botanical',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
@@ -201,7 +201,7 @@ BASE_FORMATS = {
         'body_animated': False,
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
-        'ken_burns_effect': 'zoom_in',
+        'ken_burns_effect': 'none',
         'subject_mode': 'pov',
         'subject_interval': 0,
         'scene_detection_temperature': 0.4,
@@ -3107,12 +3107,12 @@ def _create_video_from_image_pil_blocking(image_path, video_path, duration, effe
 
 
 def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
-    """Run PIL frame-by-frame rendering in a native thread so it doesn't block gevent."""
-    import gevent
-    gevent.get_hub().threadpool.apply(
-        _create_video_from_image_pil_blocking,
-        (image_path, video_path, duration, effect, scene_index)
-    )
+    """Create video from image with optional Ken Burns effect.
+
+    Runs directly in the greenlet context (not threadpool) so that gevent's
+    monkey-patched subprocess can use child watchers on the default event loop.
+    """
+    _create_video_from_image_pil_blocking(image_path, video_path, duration, effect, scene_index)
 
 
 def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
