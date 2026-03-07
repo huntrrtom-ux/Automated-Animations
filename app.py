@@ -911,7 +911,9 @@ def migrate_tv_show_pov_channel():
             "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
             "and ensure ALL scenes reflect that era consistently. "
             "Vary camera angles: wide establishing shots with character visible, medium shots of character "
-            "interacting with the environment, and close-ups of character reactions."
+            "interacting with the environment, close-ups of character reactions, "
+            "and occasionally first-person POV shots showing what the character sees through their eyes "
+            "(e.g. looking down at their own hands, peering through a doorway, gazing across a landscape)."
         ),
         image_instructions=(
             "Cinematic TV-show quality. Dramatic lighting, rich color grading, depth of field. "
