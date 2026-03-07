@@ -1008,6 +1008,41 @@ def migrate_fix_tv_show_pov_label():
 migrate_fix_tv_show_pov_label()
 
 
+def migrate_clear_new_channel_tags():
+    """One-time fix: remove auto-assigned tags from botanical and tv-show-pov channels."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_clear_new_channel_tags.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt_base = cfg.get('format', {}).get('base', '')
+            if fmt_base in ('botanical', 'tv-show-pov') and cfg.get('tags'):
+                old_tags = cfg['tags']
+                cfg['tags'] = []
+                cfg['tag_colors'] = {}
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"  Cleared tags from {name}: {old_tags}")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== CLEAR NEW CHANNEL TAGS COMPLETE ===")
+
+migrate_clear_new_channel_tags()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
