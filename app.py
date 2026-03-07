@@ -1184,6 +1184,43 @@ def migrate_disable_ken_burns_botanical_tvshow():
 migrate_disable_ken_burns_botanical_tvshow()
 
 
+def migrate_enable_subtle_zoom_botanical():
+    """One-time migration: enable subtle zoom_in for botanical channels."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_enable_zoom_botanical.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== MIGRATION: Enabling subtle zoom for botanical channels ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+    patched = 0
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'botanical':
+                fmt['ken_burns_effect'] = 'zoom_in'
+                fmt['ken_burns_scale'] = 1.03
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                patched += 1
+                logger.info(f"  Patched {name}: ken_burns -> zoom_in, scale -> 1.03")
+        except Exception as e:
+            logger.error(f"  Failed to patch {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info(f"=== MIGRATION COMPLETE: {patched} botanical channel(s) patched ===")
+
+migrate_enable_subtle_zoom_botanical()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
