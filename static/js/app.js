@@ -34,6 +34,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${m}:${String(s).padStart(2, '0')}`;
     }
 
+    function getFormatInfo(channelData) {
+        const fmt = channelData.format || {};
+        const base = fmt.base || 'pulse';
+        const label = fmt.label || (base.charAt(0).toUpperCase() + base.slice(1));
+        return { base, label };
+    }
+
     // ===================== STATE =====================
     const WIZARD_STEPS = ['home', 'channel', 'upload', 'generate'];
     let currentStep = 'home';
@@ -115,9 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedChannelData && step !== 'home') {
             ctxBar.classList.remove('hidden');
             document.getElementById('ctx-name').textContent = selectedChannelData.name;
-            const fmt = selectedChannelData.format || {};
-            const formatLabel = fmt.label || fmt.base || 'pulse';
-            document.getElementById('ctx-format').textContent = formatLabel;
+            document.getElementById('ctx-format').textContent = getFormatInfo(selectedChannelData).label;
             const logoImg = document.getElementById('ctx-logo');
             if (selectedChannelData.has_logo) {
                 logoImg.src = `/api/channels/${selectedChannelData.id}/logo.png`;
@@ -337,8 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const ch = selectedChannelData;
-        const formatBase = ch.format ? ch.format.base : 'flash';
-        const formatLabel = ch.format ? (ch.format.label || formatBase) : formatBase;
+        const { base: formatBase, label: formatLabel } = getFormatInfo(ch);
         const tailoredPrefix = ch.format_tailored ? 'Tailored ' : '';
 
         let tagsHtml = '';
@@ -424,9 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (selectedChannelData) {
             document.getElementById('confirm-channel').textContent = selectedChannelData.name;
-            const fmtObj = selectedChannelData.format || {};
-            const fmtBase = fmtObj.base || 'pulse';
-            const fmtLabel = fmtObj.label || fmtBase;
+            const { base: fmtBase, label: fmtLabel } = getFormatInfo(selectedChannelData);
             const formatIcons = { pulse: '\u26A1 Pulse', flash: '\uD83C\uDF93 Flash', deep: '\uD83D\uDCDA Deep' };
             document.getElementById('confirm-format').textContent = formatIcons[fmtBase] || fmtLabel;
         }

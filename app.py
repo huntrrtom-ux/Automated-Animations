@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import sys
 import json
@@ -3002,11 +3005,12 @@ def insert_topic_silences(audio_path, topic_boundaries, work_dir, prepend_silenc
     return output_path, insert_points
 
 
-def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
+def _create_video_from_image_pil_blocking(image_path, video_path, duration, effect='none', scene_index=0):
     """Create a video from a still image using PIL frame-by-frame rendering for smooth Ken Burns.
 
     Renders each frame with Pillow for sub-pixel smooth motion, then encodes with ffmpeg.
     Falls back to ffmpeg-only approach on failure.
+    NOTE: This is CPU-bound. Call via create_video_from_image_pil() which runs it in a thread.
     """
     from PIL import Image as PILImage
     FPS = 25
@@ -3041,13 +3045,11 @@ def create_video_from_image_pil(image_path, video_path, duration, effect='none',
                 t = f_idx / max(frames - 1, 1)  # 0.0 → 1.0
 
                 if actual_effect == 'zoom_in':
-                    # Start full, end cropped to center
                     crop_w = scaled_w - int((scaled_w - OUTPUT_W) * t)
                     crop_h = scaled_h - int((scaled_h - OUTPUT_H) * t)
                     x = (scaled_w - crop_w) // 2
                     y = (scaled_h - crop_h) // 2
                 elif actual_effect == 'zoom_out':
-                    # Start cropped, end full
                     crop_w = OUTPUT_W + int((scaled_w - OUTPUT_W) * t)
                     crop_h = OUTPUT_H + int((scaled_h - OUTPUT_H) * t)
                     x = (scaled_w - crop_w) // 2
@@ -3102,6 +3104,15 @@ def create_video_from_image_pil(image_path, video_path, duration, effect='none',
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         except Exception as e2:
             logger.error(f"Static fallback also failed: {e2}")
+
+
+def create_video_from_image_pil(image_path, video_path, duration, effect='none', scene_index=0):
+    """Run PIL frame-by-frame rendering in a native thread so it doesn't block gevent."""
+    import gevent
+    gevent.get_hub().threadpool.apply(
+        _create_video_from_image_pil_blocking,
+        (image_path, video_path, duration, effect, scene_index)
+    )
 
 
 def create_video_from_image(image_path, video_path, duration, effect='none', scene_index=0):
@@ -3884,6 +3895,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         clips_completed = [0]
 
         def assemble_single_clip(i):
+            check_cancelled(session_id)
             scene = scenes[i]
             scene_num = scene['scene_number']
             start, end = scene['start_time'], scene['end_time']
@@ -3971,6 +3983,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         emit_progress(session_id, 'generation', 85, f'Assembling clips (0/{total})...')
 
         for batch_start in range(0, len(scenes), CLIP_BATCH_SIZE):
+            check_cancelled(session_id)
             batch_end = min(batch_start + CLIP_BATCH_SIZE, len(scenes))
             batch_indices = list(range(batch_start, batch_end))
 
