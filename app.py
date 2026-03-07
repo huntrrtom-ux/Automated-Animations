@@ -51,6 +51,34 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 active_sessions = {}
 _active_sessions_lock = threading.Lock()
 
+# Cancellation flags — set session_id: True to request cancellation
+_cancelled_sessions = {}
+_cancelled_lock = threading.Lock()
+
+def request_cancel(session_id):
+    """Mark a session for cancellation."""
+    with _cancelled_lock:
+        _cancelled_sessions[session_id] = True
+
+def is_cancelled(session_id):
+    """Check if a session has been cancelled."""
+    with _cancelled_lock:
+        return _cancelled_sessions.get(session_id, False)
+
+def clear_cancel(session_id):
+    """Clear cancellation flag after cleanup."""
+    with _cancelled_lock:
+        _cancelled_sessions.pop(session_id, None)
+
+class GenerationCancelled(Exception):
+    """Raised when a user cancels an in-progress generation."""
+    pass
+
+def check_cancelled(session_id):
+    """Raise GenerationCancelled if session was cancelled."""
+    if is_cancelled(session_id):
+        raise GenerationCancelled(f"Generation {session_id} cancelled by user")
+
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
@@ -157,9 +185,9 @@ BASE_FORMATS = {
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
     },
-    'botanical-pov-character': {
-        'base': 'botanical-pov-character',
-        'label': 'Botanical – POV Character',
+    'tv-show-pov': {
+        'base': 'tv-show-pov',
+        'label': 'TV Show POV',
         'description': 'PIL frame-by-frame with persistent POV character',
         'intro_duration': 30,
         'intro_animated': False,
@@ -835,8 +863,8 @@ def migrate_plants_explainer_channel():
     channel_id = save_channel(
         name='Plants Explainer',
         base_format='botanical',
-        tags='Plants,Education',
-        tag_colors={'Plants': '#2d8a4e', 'Education': '#4a90d9'},
+        tags='',
+        tag_colors={},
         scene_instructions=(
             "This channel covers specific plants in educational segments. "
             "Each section of the transcript discusses a particular plant — identify it from context "
@@ -875,7 +903,7 @@ migrate_plants_explainer_channel()
 
 
 def migrate_tv_show_pov_channel():
-    """One-time migration: create TV Show POV channel with botanical-pov-character format."""
+    """One-time migration: create TV Show POV channel with tv-show-pov format."""
     flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_tv_show_pov.done')
     if os.path.exists(flag_path):
         return
@@ -902,16 +930,18 @@ def migrate_tv_show_pov_channel():
 
     channel_id = save_channel(
         name='TV Show POV',
-        base_format='botanical-pov-character',
-        tags='TV Show,POV,Character',
-        tag_colors={'TV Show': '#e6553a', 'POV': '#8b5cf6', 'Character': '#d97706'},
+        base_format='tv-show-pov',
+        tags='',
+        tag_colors={},
         scene_instructions=(
             "This is a TV-show-style narration with a single persistent POV character. "
             "The character must appear in EVERY scene — they are the protagonist. "
             "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
             "and ensure ALL scenes reflect that era consistently. "
             "Vary camera angles: wide establishing shots with character visible, medium shots of character "
-            "interacting with the environment, and close-ups of character reactions."
+            "interacting with the environment, close-ups of character reactions, "
+            "and occasionally first-person POV shots showing what the character sees through their eyes "
+            "(e.g. looking down at their own hands, peering through a doorway, gazing across a landscape)."
         ),
         image_instructions=(
             "Cinematic TV-show quality. Dramatic lighting, rich color grading, depth of field. "
@@ -928,14 +958,14 @@ def migrate_tv_show_pov_channel():
         cfg = json.load(f)
 
     fmt = cfg['format']
-    fmt['label'] = 'Botanical – POV Character'
+    fmt['label'] = 'TV Show POV'
     fmt['description'] = 'PIL frame-by-frame with persistent POV character'
     cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
 
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
 
-    logger.info(f"  Created 'TV Show POV' as {channel_id} with botanical-pov-character format")
+    logger.info(f"  Created 'TV Show POV' as {channel_id} with tv-show-pov format")
 
     with open(flag_path, 'w') as f:
         f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -1246,7 +1276,9 @@ def get_format_subject_rules(format_config, has_subject):
         return (
             "\n\nMAIN CHARACTER (POV CHARACTER — CRITICAL):\n"
             "A character reference image has been uploaded. This character is the PROTAGONIST of the video.\n"
-            "- The character MUST appear in EVERY scene — set has_subject: true for ALL scenes, no exceptions\n"
+            "- The character should appear in roughly 80% of all scenes — set has_subject: true for ~80% of scenes\n"
+            "- Set has_subject: false for ~20% of scenes — pure establishing shots, object close-ups, "
+            "or environmental scenes that benefit from showing the world without the character\n"
             "- CHARACTER CONSISTENCY: The character's core appearance (face, body type, hair) must stay "
             "IDENTICAL across all scenes. You may make MINOR natural tweaks (e.g. sleeves rolled up, hair "
             "slightly windswept) but NEVER change defining features like hair color, build, or facial structure.\n"
@@ -1255,10 +1287,13 @@ def get_format_subject_rules(format_config, has_subject):
             "  If modern/contemporary — use normal modern attire (casual, business, sportswear, etc.)\n"
             "  If futuristic/sci-fi — use appropriate futuristic clothing\n"
             "  The attire should match the SITUATION too (a character in a lab wears a lab coat, etc.)\n"
-            "- When has_subject is true, describe the character's SPECIFIC emotion, body language, and action:\n"
-            "  GOOD: 'standing in a dimly lit medieval tavern, leaning forward over a wooden table with a suspicious expression'\n"
-            "  GOOD: 'crouching behind a wall in modern tactical gear, peering around the corner with focused intensity'\n"
+            "- When has_subject is true, describe the character's BODY LANGUAGE and ACTION only:\n"
+            "  GOOD: 'standing in a dimly lit medieval tavern, leaning forward over a wooden table, gripping the edge'\n"
+            "  GOOD: 'crouching behind a wall in modern tactical gear, peering around the corner with rifle raised'\n"
+            "  BAD: 'smiling warmly with a joyful expression' (NO facial emotion descriptions)\n"
             "  BAD: 'the main character appears' (too vague)\n"
+            "- NEVER describe facial expressions, emotions, or face details — focus ONLY on "
+            "body position, hand actions, posture, and interaction with the environment\n"
             "- The character should feel like the LEAD of a TV show — always present, always in the action\n"
         )
     elif subject_mode == 'sparse':
@@ -1436,7 +1471,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
             )
         # Botanical format: plant identification + subscribe CTA detection
-        if format_config.get('subject_mode') == 'botanical':
+        if format_config.get('base') == 'botanical':
             system_prompt += (
                 "\n\nPLANT IDENTIFICATION (CRITICAL FOR BOTANICAL FORMAT):\n"
                 "This transcript covers specific plants, one at a time or in sections.\n"
@@ -3045,6 +3080,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
+        check_cancelled(session_id)
+
         if ASSEMBLYAI_API_KEY:
             try:
                 transcript_data = transcribe_audio_assemblyai(filepath, session_id)
@@ -3054,6 +3091,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 transcript_data = transcribe_audio(filepath, session_id)
         else:
             transcript_data = transcribe_audio(filepath, session_id)
+        check_cancelled(session_id)
+
         # Resolve character instructions: per-video override > channel default
         resolved_char_instructions = character_instructions or (
             channel_config.get('character_instructions', '') if channel_config else ''
@@ -3512,6 +3551,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         emit_progress(session_id, 'generation', 30, f'Generating images (0/{total})...')
 
         for batch_start in range(0, len(scenes), IMAGE_BATCH_SIZE):
+            check_cancelled(session_id)
             batch_end = min(batch_start + IMAGE_BATCH_SIZE, len(scenes))
             batch_indices = list(range(batch_start, batch_end))
 
@@ -3631,10 +3671,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             return idx, animated, video_path if animated else None
 
         if total_anims > 0:
+            check_cancelled(session_id)
             logger.info(f"=== PHASE 2: Batch animation for {total_anims} scenes (batches of {ANIM_BATCH_SIZE}) ===")
             emit_progress(session_id, 'generation', 60, f'Animating scenes (0/{total_anims})...')
 
             for batch_start in range(0, total_anims, ANIM_BATCH_SIZE):
+                check_cancelled(session_id)
                 batch_end = min(batch_start + ANIM_BATCH_SIZE, total_anims)
                 batch_indices = [anim_scenes[j] for j in range(batch_start, batch_end)]
 
@@ -3754,6 +3796,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                 return i, vid
 
+        check_cancelled(session_id)
         logger.info(f"=== PHASE 3: Parallel clip assembly for {total} scenes (batches of {CLIP_BATCH_SIZE}) ===")
         emit_progress(session_id, 'generation', 85, f'Assembling clips (0/{total})...')
 
@@ -3858,13 +3901,33 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         })
         
         return output_path
+    except GenerationCancelled:
+        with _active_sessions_lock:
+            active_sessions.pop(session_id, None)
+        whisk_pool.release_key(session_id)
+        clear_cancel(session_id)
+        logger.info(f"[{session_id}] Generation cancelled by user")
+        emit_progress(session_id, 'cancelled', 0, 'Generation cancelled')
+        log_generation({
+            'session_id': session_id,
+            'device_id': device_id,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'filename': os.path.basename(filepath),
+            'channel_id': channel_id or 'none',
+            'channel_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
+            'status': 'cancelled',
+            'error': 'Cancelled by user',
+            'project_title': project_title,
+            'preset_id': channel_id or 'none'
+        })
     except Exception as e:
         with _active_sessions_lock:
             active_sessions.pop(session_id, None)
         whisk_pool.release_key(session_id)
+        clear_cancel(session_id)
         logger.error(f"Pipeline error: {e}", exc_info=True)
         emit_progress(session_id, 'error', 0, f'Error: {str(e)}')
-        
+
         # Log failed generation
         log_generation({
             'session_id': session_id,
@@ -4082,6 +4145,20 @@ def upload_audio():
     file.save(filepath)
     socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id, character_instructions)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
+
+@app.route('/api/cancel-generation', methods=['POST'])
+def cancel_generation():
+    """Cancel an in-progress generation by session ID."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id', '')
+    if not session_id:
+        return jsonify({'error': 'Missing session_id'}), 400
+    with _active_sessions_lock:
+        if session_id not in active_sessions:
+            return jsonify({'error': 'Session not found or already finished'}), 404
+    request_cancel(session_id)
+    logger.info(f"[{session_id}] Cancellation requested by user")
+    return jsonify({'ok': True, 'message': 'Cancellation requested'})
 
 @app.route('/download/<session_id>/<filename>')
 def download_file(session_id, filename):
