@@ -471,6 +471,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('progress-bar').style.width = '0%';
                 document.getElementById('progress-text').textContent = '0%';
                 document.getElementById('status-message').style.color = '';
+                // Reset cancel button
+                const cancelBtn = document.getElementById('cancel-generation-btn');
+                if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.querySelector('.btn-text')?.remove(); }
             } else {
                 showToast(data.error || 'Upload failed', 'error');
                 confirmCard.classList.remove('hidden');
@@ -480,6 +483,24 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Upload failed \u2014 check your connection', 'error');
             confirmCard.classList.remove('hidden');
             processingCard.classList.add('hidden');
+        }
+    });
+
+    // ===================== CANCEL GENERATION =====================
+    document.getElementById('cancel-generation-btn')?.addEventListener('click', async () => {
+        if (!currentSessionId || !isGenerating) return;
+        const cancelBtn = document.getElementById('cancel-generation-btn');
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = 'Cancelling...';
+        try {
+            await fetch('/api/cancel-generation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId })
+            });
+        } catch {
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel Generation';
         }
     });
 
@@ -556,6 +577,13 @@ document.addEventListener('DOMContentLoaded', () => {
             fireConfetti();
             showToast('Video generated successfully!', 'success', 6000);
             setTimeout(() => showResult(data.data), 600);
+        }
+
+        if (step === 'cancelled') {
+            isGenerating = false;
+            document.title = 'Cancelled - Hunter Motions';
+            statusMessage.style.color = 'var(--warn)';
+            showToast('Generation cancelled', 'error');
         }
 
         if (step === 'error') {

@@ -51,6 +51,34 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 active_sessions = {}
 _active_sessions_lock = threading.Lock()
 
+# Cancellation flags — set session_id: True to request cancellation
+_cancelled_sessions = {}
+_cancelled_lock = threading.Lock()
+
+def request_cancel(session_id):
+    """Mark a session for cancellation."""
+    with _cancelled_lock:
+        _cancelled_sessions[session_id] = True
+
+def is_cancelled(session_id):
+    """Check if a session has been cancelled."""
+    with _cancelled_lock:
+        return _cancelled_sessions.get(session_id, False)
+
+def clear_cancel(session_id):
+    """Clear cancellation flag after cleanup."""
+    with _cancelled_lock:
+        _cancelled_sessions.pop(session_id, None)
+
+class GenerationCancelled(Exception):
+    """Raised when a user cancels an in-progress generation."""
+    pass
+
+def check_cancelled(session_id):
+    """Raise GenerationCancelled if session was cancelled."""
+    if is_cancelled(session_id):
+        raise GenerationCancelled(f"Generation {session_id} cancelled by user")
+
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
@@ -3052,6 +3080,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         audio_duration = get_audio_duration(filepath)
         emit_progress(session_id, 'init', 1, f'Audio: {audio_duration/60:.1f} min')
 
+        check_cancelled(session_id)
+
         if ASSEMBLYAI_API_KEY:
             try:
                 transcript_data = transcribe_audio_assemblyai(filepath, session_id)
@@ -3061,6 +3091,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 transcript_data = transcribe_audio(filepath, session_id)
         else:
             transcript_data = transcribe_audio(filepath, session_id)
+        check_cancelled(session_id)
+
         # Resolve character instructions: per-video override > channel default
         resolved_char_instructions = character_instructions or (
             channel_config.get('character_instructions', '') if channel_config else ''
@@ -3519,6 +3551,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         emit_progress(session_id, 'generation', 30, f'Generating images (0/{total})...')
 
         for batch_start in range(0, len(scenes), IMAGE_BATCH_SIZE):
+            check_cancelled(session_id)
             batch_end = min(batch_start + IMAGE_BATCH_SIZE, len(scenes))
             batch_indices = list(range(batch_start, batch_end))
 
@@ -3638,10 +3671,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             return idx, animated, video_path if animated else None
 
         if total_anims > 0:
+            check_cancelled(session_id)
             logger.info(f"=== PHASE 2: Batch animation for {total_anims} scenes (batches of {ANIM_BATCH_SIZE}) ===")
             emit_progress(session_id, 'generation', 60, f'Animating scenes (0/{total_anims})...')
 
             for batch_start in range(0, total_anims, ANIM_BATCH_SIZE):
+                check_cancelled(session_id)
                 batch_end = min(batch_start + ANIM_BATCH_SIZE, total_anims)
                 batch_indices = [anim_scenes[j] for j in range(batch_start, batch_end)]
 
@@ -3761,6 +3796,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 create_video_from_image(img_path, vid, duration, effect=scene_effect, scene_index=i)
                 return i, vid
 
+        check_cancelled(session_id)
         logger.info(f"=== PHASE 3: Parallel clip assembly for {total} scenes (batches of {CLIP_BATCH_SIZE}) ===")
         emit_progress(session_id, 'generation', 85, f'Assembling clips (0/{total})...')
 
@@ -3865,13 +3901,33 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         })
         
         return output_path
+    except GenerationCancelled:
+        with _active_sessions_lock:
+            active_sessions.pop(session_id, None)
+        whisk_pool.release_key(session_id)
+        clear_cancel(session_id)
+        logger.info(f"[{session_id}] Generation cancelled by user")
+        emit_progress(session_id, 'cancelled', 0, 'Generation cancelled')
+        log_generation({
+            'session_id': session_id,
+            'device_id': device_id,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'filename': os.path.basename(filepath),
+            'channel_id': channel_id or 'none',
+            'channel_name': channel_config.get('name', 'Unknown') if channel_config else 'None',
+            'status': 'cancelled',
+            'error': 'Cancelled by user',
+            'project_title': project_title,
+            'preset_id': channel_id or 'none'
+        })
     except Exception as e:
         with _active_sessions_lock:
             active_sessions.pop(session_id, None)
         whisk_pool.release_key(session_id)
+        clear_cancel(session_id)
         logger.error(f"Pipeline error: {e}", exc_info=True)
         emit_progress(session_id, 'error', 0, f'Error: {str(e)}')
-        
+
         # Log failed generation
         log_generation({
             'session_id': session_id,
@@ -4089,6 +4145,20 @@ def upload_audio():
     file.save(filepath)
     socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id, character_instructions)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
+
+@app.route('/api/cancel-generation', methods=['POST'])
+def cancel_generation():
+    """Cancel an in-progress generation by session ID."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id', '')
+    if not session_id:
+        return jsonify({'error': 'Missing session_id'}), 400
+    with _active_sessions_lock:
+        if session_id not in active_sessions:
+            return jsonify({'error': 'Session not found or already finished'}), 404
+    request_cancel(session_id)
+    logger.info(f"[{session_id}] Cancellation requested by user")
+    return jsonify({'ok': True, 'message': 'Cancellation requested'})
 
 @app.route('/download/<session_id>/<filename>')
 def download_file(session_id, filename):
