@@ -375,7 +375,8 @@
             }
             grid.innerHTML = adminChannelCache.map(ch => {
                 const hasLogo = ch.has_logo;
-                const formatBase = ch.format ? (ch.format.label || ch.format.base) : 'pulse';
+                const _fmt = ch.format || {};
+                const formatLabel = _fmt.label || (_fmt.base ? _fmt.base.charAt(0).toUpperCase() + _fmt.base.slice(1) : 'Pulse');
                 const hasSubject = ch.has_subject;
                 let logoHtml = hasLogo
                     ? `<img class="admin-ch-logo" src="/api/channels/${ch.id}/logo.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="admin-ch-logo-ph" style="display:none">\uD83D\uDD27</div>`
@@ -387,7 +388,7 @@
                 return `<div class="admin-ch-tile" data-id="${ch.id}" onclick="openEditPanel('${ch.id}')">
                     <div class="admin-ch-logo-wrap">${logoHtml}</div>
                     <div class="admin-ch-name">${escHtml(ch.name)}</div>
-                    <div class="admin-ch-meta">${formatBase} \u2022 ${hasSubject ? '\u2713 subject' : '\u2717 no subject'}</div>
+                    <div class="admin-ch-meta">${formatLabel} \u2022 ${hasSubject ? '\u2713 subject' : '\u2717 no subject'}</div>
                     ${tagsHtml ? `<div class="admin-ch-tags">${tagsHtml}</div>` : ''}
                 </div>`;
             }).join('');

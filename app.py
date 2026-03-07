@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import sys
 import json
@@ -3884,6 +3887,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         clips_completed = [0]
 
         def assemble_single_clip(i):
+            check_cancelled(session_id)
             scene = scenes[i]
             scene_num = scene['scene_number']
             start, end = scene['start_time'], scene['end_time']
@@ -3971,6 +3975,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         emit_progress(session_id, 'generation', 85, f'Assembling clips (0/{total})...')
 
         for batch_start in range(0, len(scenes), CLIP_BATCH_SIZE):
+            check_cancelled(session_id)
             batch_end = min(batch_start + CLIP_BATCH_SIZE, len(scenes))
             batch_indices = list(range(batch_start, batch_end))
 
