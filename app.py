@@ -974,6 +974,40 @@ def migrate_tv_show_pov_channel():
 migrate_tv_show_pov_channel()
 
 
+def migrate_fix_tv_show_pov_label():
+    """One-time fix: rename 'Botanical – POV Character' label to 'TV Show POV'."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_fix_tvshowpov_label.done')
+    if os.path.exists(flag_path):
+        return
+
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'tv-show-pov' and fmt.get('label') != 'TV Show POV':
+                old_label = fmt.get('label', '?')
+                fmt['label'] = 'TV Show POV'
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"  Fixed TV Show POV label: '{old_label}' -> 'TV Show POV' in {name}")
+        except Exception:
+            pass
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== TV SHOW POV LABEL FIX COMPLETE ===")
+
+migrate_fix_tv_show_pov_label()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
