@@ -785,6 +785,74 @@ def migrate_space_theories_channel():
 migrate_space_theories_channel()
 
 
+def migrate_plants_explainer_channel():
+    """One-time migration: create Plants Explainer channel with botanical format."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_plants_explainer.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== PLANTS EXPLAINER MIGRATION: Creating channel ===")
+
+    # Check if channel already exists by name
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                if cfg.get('name') == 'Plants Explainer':
+                    logger.info("  'Plants Explainer' already exists — skipping creation")
+                    with open(flag_path, 'w') as f:
+                        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+                    return
+            except Exception:
+                pass
+
+    channel_id = save_channel(
+        name='Plants Explainer',
+        base_format='botanical',
+        tags='Plants,Education',
+        tag_colors={'Plants': '#2d8a4e', 'Education': '#4a90d9'},
+        scene_instructions=(
+            "This channel covers specific plants in educational segments. "
+            "Each section of the transcript discusses a particular plant — identify it from context "
+            "and ensure every scene in that section depicts ONLY that specific plant. "
+            "Alternate between close-up botanical detail shots and wider scenes showing the plant "
+            "in its natural habitat or garden setting."
+        ),
+        image_instructions=(
+            "Lush, detailed botanical illustration style. Rich natural lighting, vivid greens and earth tones. "
+            "Every plant must be accurately depicted with correct leaf shapes, flower structures, and growth habits."
+        ),
+    )
+
+    # The botanical base format already has the right settings,
+    # but let's confirm the key fields are set correctly
+    ch_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(ch_dir, 'config.json')
+    with open(config_path, 'r') as f:
+        cfg = json.load(f)
+
+    fmt = cfg['format']
+    fmt['label'] = 'Botanical'
+    fmt['description'] = 'Plant-focused educational with subject character'
+    cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    logger.info(f"  Created 'Plants Explainer' as {channel_id} with botanical format, 2-8s scenes, zoom_in Ken Burns")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== PLANTS EXPLAINER MIGRATION COMPLETE ===")
+
+migrate_plants_explainer_channel()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
