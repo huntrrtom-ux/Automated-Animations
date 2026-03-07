@@ -2629,11 +2629,12 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
         else:
             styled_prompt = f"MANDATORY ART STYLE — every element must be rendered in this style: {style_text}. DO NOT use photorealistic or realistic rendering. {prompt}"
         if has_subject:
-            styled_prompt = f"Create a unique new scene — DO NOT copy the subject reference image. {styled_prompt}"
+            styled_prompt = f"KEEP the reference character's face and identity — place them in a completely new pose, expression, and setting. DO NOT copy the reference image's background or composition. {styled_prompt}"
     elif has_style_image:
         # Style image is the reference — reinforce style_text alongside image
         style_reinforcement = f" MANDATORY ART STYLE: {style_text}. DO NOT use photorealistic or realistic rendering." if style_text else ""
-        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image).{style_reinforcement} {prompt}"
+        subject_reinforcement = " KEEP the reference character's face and identity — vary pose, expression, and setting." if has_subject else ""
+        styled_prompt = f"Generate a brand new unique scene (DO NOT replicate the style reference image).{style_reinforcement}{subject_reinforcement} {prompt}"
     else:
         styled_prompt = prompt
 
@@ -3808,7 +3809,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             elif image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
             if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
-                prompt = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {prompt}"
+                prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {prompt}"
             result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
@@ -3870,7 +3871,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 elif image_instructions:
                     rephrased = f"{image_instructions}. {rephrased}"
                 if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
-                    rephrased = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {rephrased}"
+                    rephrased = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {rephrased}"
                 result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                 
                 if result == "TOKEN_EXPIRED":
@@ -3940,7 +3941,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     elif image_instructions:
                         regen_prompt = f"{image_instructions}. {regen_prompt}"
                     if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
-                        regen_prompt = f"CHARACTER APPEARANCE: {resolved_char_instructions}. {regen_prompt}"
+                        regen_prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {regen_prompt}"
                     new_image = generate_image_whisk(regen_prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
                     if new_image in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
                         return idx, new_image, None
@@ -4528,7 +4529,7 @@ def regenerate_scene():
     elif image_instructions:
         prompt = f"{image_instructions}. {prompt}"
     if scene_has_subject and character_instructions and video_format == 'tv-show-pov':
-        prompt = f"CHARACTER APPEARANCE: {character_instructions}. {prompt}"
+        prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {character_instructions}. {prompt}"
     socketio.emit('regen_progress', {'session_id': session_id, 'progress': 15, 'message': 'Generating image...'})
     result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
 
@@ -4675,7 +4676,7 @@ def regenerate_batch():
         elif batch_image_instructions:
             prompt = f"{batch_image_instructions}. {prompt}"
         if scene_has_subject and character_instructions and batch_video_format == 'tv-show-pov':
-            prompt = f"CHARACTER APPEARANCE: {character_instructions}. {prompt}"
+            prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {character_instructions}. {prompt}"
 
         logger.info(f"Batch regen: generating image for scene {scene_num}")
         result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
