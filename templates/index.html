@@ -87,6 +87,12 @@
                 <input type="text" id="project-title" class="text-input" placeholder="e.g. my_video_title">
             </div>
 
+            <!-- Character Instructions (per-video override) -->
+            <div class="form-group hidden" id="character-instructions-group" style="margin-bottom:1rem">
+                <label>Character Instructions <span class="tooltip" data-tip="Describe the character for this specific video. Overrides channel defaults if provided.">?</span></label>
+                <textarea id="character-instructions" class="text-input" rows="3" placeholder="e.g. Male, mid-30s, wearing medieval armor, battle-scarred..." style="resize:vertical"></textarea>
+            </div>
+
             <div class="upload-zone" id="drop-zone">
                 <div class="upload-icon-wrap">
                     <svg viewBox="0 0 48 48" fill="none" class="upload-icon">
