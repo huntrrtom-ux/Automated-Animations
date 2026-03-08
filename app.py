@@ -1357,20 +1357,41 @@ def transcribe_audio(filepath, session_id):
 
 def transcribe_audio_assemblyai(filepath, session_id):
     """Transcribe audio using AssemblyAI for more accurate timestamps."""
-    import assemblyai as aai
-    aai.settings.api_key = ASSEMBLYAI_API_KEY
+    aai_headers = {"authorization": ASSEMBLYAI_API_KEY}
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
-    config = aai.TranscriptionConfig(speech_models=["universal-3-pro"], language_detection=True, auto_chapters=True)
-    transcriber = aai.Transcriber()
+    # Upload file using requests (gevent-safe) instead of assemblyai SDK (uses httpx, not gevent-safe)
+    logger.info(f"AssemblyAI: uploading {filepath}")
+    with open(filepath, 'rb') as f:
+        upload_resp = req.post(
+            "https://api.assemblyai.com/v2/upload",
+            headers=aai_headers,
+            data=f,
+            timeout=300,
+        )
+    upload_resp.raise_for_status()
+    upload_url = upload_resp.json()["upload_url"]
+    logger.info(f"AssemblyAI: upload complete -> {upload_url[:80]}...")
+
     emit_progress(session_id, 'transcription', 5, 'Submitting to AssemblyAI...')
 
-    # Use submit() + manual polling with timeout instead of blocking transcribe()
-    transcript = transcriber.submit(filepath, config=config)
-    transcript_id = transcript.id
+    # Submit transcription job using requests
+    submit_resp = req.post(
+        "https://api.assemblyai.com/v2/transcript",
+        headers={**aai_headers, "content-type": "application/json"},
+        json={
+            "audio_url": upload_url,
+            "speech_model": "best",
+            "language_detection": True,
+            "auto_chapters": True,
+        },
+        timeout=30,
+    )
+    submit_resp.raise_for_status()
+    transcript_id = submit_resp.json()["id"]
     logger.info(f"AssemblyAI job submitted: {transcript_id}")
 
-    poll_headers = {"authorization": ASSEMBLYAI_API_KEY}
+    poll_headers = aai_headers
     start = time.time()
     TIMEOUT = 1800  # 30 minutes
     poll_data = None
