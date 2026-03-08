@@ -182,7 +182,7 @@ BASE_FORMATS = {
         'body_animated': False,
         'periodic_animation_interval': 0,
         'periodic_animation_window': 0,
-        'ken_burns_effect': 'zoom_in',
+        'ken_burns_effect': 'none',
         'ken_burns_scale': 1.03,
         'subject_mode': 'botanical',
         'subject_interval': 0,
@@ -897,7 +897,7 @@ def migrate_plants_explainer_channel():
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
 
-    logger.info(f"  Created 'Plants Explainer' as {channel_id} with botanical format, 2-8s scenes, zoom_in Ken Burns")
+    logger.info(f"  Created 'Plants Explainer' as {channel_id} with botanical format, 2-8s scenes, no Ken Burns zoom")
 
     with open(flag_path, 'w') as f:
         f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -1219,6 +1219,42 @@ def migrate_enable_subtle_zoom_botanical():
     logger.info(f"=== MIGRATION COMPLETE: {patched} botanical channel(s) patched ===")
 
 migrate_enable_subtle_zoom_botanical()
+
+
+def migrate_disable_zoom_botanical():
+    """One-time migration: disable Ken Burns zoom for botanical channels to fix assembly bugs."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_disable_zoom_botanical.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== MIGRATION: Disabling zoom for botanical channels ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+    patched = 0
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'botanical':
+                fmt['ken_burns_effect'] = 'none'
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                patched += 1
+                logger.info(f"  Patched {name}: ken_burns -> none (zoom disabled)")
+        except Exception as e:
+            logger.error(f"  Failed to patch {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info(f"=== MIGRATION COMPLETE: {patched} botanical channel(s) — zoom disabled ===")
+
+migrate_disable_zoom_botanical()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
