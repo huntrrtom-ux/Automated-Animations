@@ -3925,7 +3925,6 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     sc['has_subject'] = False
                     orig = sc.get('visual_description', '')
                     # Strip any text/number references from the description
-                    import re
                     cleaned = re.sub(r'(?i)\b(number|#|no\.?)\s*\d+\b', '', orig)
                     cleaned = re.sub(r'(?i)\bat\s+(number|#|no\.?)\s*\d+\b', '', cleaned)
                     cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
@@ -4023,7 +4022,6 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
 
             # Content safety: sanitize unsafe terms for pregnancy/medical channels
             if topic_title_cards_enabled:
-                import re
                 _unsafe = [
                     (r'\b(naked|nude|nudity|topless|bare.?breasted?)\b', 'modestly dressed'),
                     (r'\b(genital[s]?|vagina[l]?|penis|vulva|cervix|uterus)\b', 'medical symbol'),
