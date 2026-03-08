@@ -16,6 +16,7 @@ import tempfile
 import threading
 import bisect
 import hashlib
+import re
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -3452,7 +3453,7 @@ def compose_final_video(scene_videos, audio_path, output_path, session_id, audio
 
 
 # ===================== MAIN PIPELINE =====================
-def process_voiceover(filepath, session_id, channel_id=None, project_title='', device_id='unknown', character_instructions=''):
+def process_voiceover(filepath, session_id, channel_id=None, project_title='', device_id='unknown', character_instructions='', user_transcript=''):
     # Track this session as active
     with _active_sessions_lock:
         active_sessions[session_id] = {
@@ -3484,19 +3485,58 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
 
         check_cancelled(session_id)
 
-        if not ASSEMBLYAI_API_KEY:
-            error_msg = "ASSEMBLYAI_API_KEY environment variable is required for transcription"
-            logger.error(error_msg)
-            emit_progress(session_id, 'error', 0, error_msg)
-            return {'error': error_msg}
+        if user_transcript:
+            # User pasted their own transcript — skip AssemblyAI entirely.
+            # Build transcript_data by splitting text into sentences and
+            # distributing them evenly across the audio duration.
+            logger.info(f"[{session_id}] Using user-pasted transcript ({len(user_transcript)} chars), skipping AssemblyAI")
+            emit_progress(session_id, 'transcription', 5, 'Using pasted transcript...')
+            raw_sentences = re.split(r'(?<=[.!?])\s+', user_transcript.strip())
+            raw_sentences = [s.strip() for s in raw_sentences if s.strip()]
+            if not raw_sentences:
+                raw_sentences = [user_transcript.strip()]
 
-        try:
-            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
-        except Exception as e:
-            error_msg = f"Transcription failed: {e}"
-            logger.error(error_msg)
-            emit_progress(session_id, 'error', 0, error_msg)
-            return {'error': error_msg}
+            # Build uniform segments spread across the audio duration
+            n = len(raw_sentences)
+            seg_dur = audio_duration / n if n else audio_duration
+            segments = []
+            words = []
+            for i, sentence in enumerate(raw_sentences):
+                seg_start = i * seg_dur
+                seg_end = (i + 1) * seg_dur
+                segments.append({'start': seg_start, 'end': seg_end, 'text': sentence})
+                # Build word-level timestamps (evenly spaced within segment)
+                seg_words = sentence.split()
+                if seg_words:
+                    w_dur = (seg_end - seg_start) / len(seg_words)
+                    for j, w in enumerate(seg_words):
+                        w_start = seg_start + j * w_dur
+                        w_end = w_start + w_dur
+                        words.append({'text': w, 'start': w_start, 'end': w_end, 'confidence': 1.0})
+
+            transcript_data = {
+                'full_text': user_transcript,
+                'segments': segments,
+                'chapters': [],
+                'words': words,
+                'pauses': [],
+            }
+            emit_progress(session_id, 'transcription', 15, f'Pasted transcript: {len(segments)} segments')
+            logger.info(f"[{session_id}] User transcript: {len(segments)} segments, {len(words)} words")
+        else:
+            if not ASSEMBLYAI_API_KEY:
+                error_msg = "ASSEMBLYAI_API_KEY environment variable is required for transcription"
+                logger.error(error_msg)
+                emit_progress(session_id, 'error', 0, error_msg)
+                return {'error': error_msg}
+
+            try:
+                transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+            except Exception as e:
+                error_msg = f"Transcription failed: {e}"
+                logger.error(error_msg)
+                emit_progress(session_id, 'error', 0, error_msg)
+                return {'error': error_msg}
         check_cancelled(session_id)
 
         # Resolve character instructions: per-video override > channel default
@@ -4618,6 +4658,7 @@ def upload_audio():
     channel_id = request.form.get('channel_id', '') or request.form.get('preset_id', '')
     project_title = request.form.get('project_title', '').strip()
     character_instructions = request.form.get('character_instructions', '').strip()
+    user_transcript = request.form.get('user_transcript', '').strip()
     session_id = str(uuid.uuid4())[:12]
     # Build a device fingerprint from IP + User-Agent
     raw_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
@@ -4627,7 +4668,7 @@ def upload_audio():
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'{session_id}_{filename}')
     file.save(filepath)
-    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id, character_instructions)
+    socketio.start_background_task(process_voiceover, filepath, session_id, channel_id, project_title, device_id, character_instructions, user_transcript)
     return jsonify({'session_id': session_id, 'message': 'Processing started', 'filename': filename})
 
 @app.route('/api/cancel-generation', methods=['POST'])

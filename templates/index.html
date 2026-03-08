@@ -93,6 +93,20 @@
                 <textarea id="character-instructions" class="text-input" rows="3" placeholder="e.g. Male, mid-30s, wearing medieval armor, battle-scarred..." style="resize:vertical"></textarea>
             </div>
 
+            <!-- Paste Transcript (optional — bypasses AssemblyAI transcription) -->
+            <div class="paste-transcript-box hidden" id="paste-transcript-box">
+                <div class="paste-transcript-header" id="paste-transcript-toggle">
+                    <svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M13 2H7a1 1 0 00-1 1v1H4a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V5a1 1 0 00-1-1h-2V3a1 1 0 00-1-1zM7 3h6v2H7V3z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span>Paste Transcript</span>
+                    <span class="paste-transcript-hint">Skip transcription &middot; paste your own script</span>
+                    <svg class="paste-chevron" viewBox="0 0 20 20" fill="none" width="12" height="12"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="paste-transcript-body hidden" id="paste-transcript-body">
+                    <textarea id="user-transcript" class="text-input" rows="5" placeholder="Paste your full transcript / script here..." style="resize:vertical;font-size:0.82rem"></textarea>
+                    <div class="paste-transcript-status" id="paste-transcript-status"></div>
+                </div>
+            </div>
+
             <div class="upload-zone" id="drop-zone">
                 <div class="upload-icon-wrap">
                     <svg viewBox="0 0 48 48" fill="none" class="upload-icon">
@@ -143,6 +157,10 @@
                     <div class="confirm-row-lg">
                         <span class="confirm-label-lg">Project Title</span>
                         <span class="confirm-value-lg" id="confirm-title">—</span>
+                    </div>
+                    <div class="confirm-row-lg hidden" id="confirm-transcript-row">
+                        <span class="confirm-label-lg">Transcript</span>
+                        <span class="confirm-value-lg" id="confirm-transcript">—</span>
                     </div>
                 </div>
                 <div class="confirm-actions-wizard">

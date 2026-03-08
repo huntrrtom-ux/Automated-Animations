@@ -174,6 +174,13 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('project-title').value = '';
         document.getElementById('character-instructions').value = '';
         document.getElementById('character-instructions-group').classList.add('hidden');
+        // Reset paste transcript
+        document.getElementById('user-transcript').value = '';
+        document.getElementById('paste-transcript-box').classList.add('hidden');
+        document.getElementById('paste-transcript-box').classList.remove('expanded');
+        document.getElementById('paste-transcript-body').classList.add('hidden');
+        document.getElementById('paste-transcript-status').textContent = '';
+        document.getElementById('paste-transcript-status').classList.remove('has-text');
         document.title = 'Hunter Motions';
         goToStep('channel');
     });
@@ -407,6 +414,8 @@ document.addEventListener('DOMContentLoaded', () => {
         fileNameEl.textContent = file.name;
         fileSizeEl.textContent = formatSize(file.size);
         fileSelected.classList.remove('hidden');
+        // Show paste transcript option once audio is selected
+        document.getElementById('paste-transcript-box').classList.remove('hidden');
         updateNextButton();
     }
 
@@ -414,7 +423,40 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedFile = null;
         fileInput.value = '';
         fileSelected.classList.add('hidden');
+        // Hide and reset paste transcript
+        const ptBox = document.getElementById('paste-transcript-box');
+        ptBox.classList.add('hidden');
+        ptBox.classList.remove('expanded');
+        document.getElementById('paste-transcript-body').classList.add('hidden');
+        document.getElementById('user-transcript').value = '';
+        document.getElementById('paste-transcript-status').textContent = '';
+        document.getElementById('paste-transcript-status').classList.remove('has-text');
         updateNextButton();
+    });
+
+    // Paste transcript toggle
+    document.getElementById('paste-transcript-toggle').addEventListener('click', () => {
+        const box = document.getElementById('paste-transcript-box');
+        const body = document.getElementById('paste-transcript-body');
+        box.classList.toggle('expanded');
+        body.classList.toggle('hidden');
+        if (!body.classList.contains('hidden')) {
+            document.getElementById('user-transcript').focus();
+        }
+    });
+
+    // Update word count on transcript input
+    document.getElementById('user-transcript').addEventListener('input', (e) => {
+        const text = e.target.value.trim();
+        const status = document.getElementById('paste-transcript-status');
+        if (text) {
+            const wordCount = text.split(/\s+/).filter(Boolean).length;
+            status.textContent = `${wordCount} words \u2014 will skip AssemblyAI transcription`;
+            status.classList.add('has-text');
+        } else {
+            status.textContent = '';
+            status.classList.remove('has-text');
+        }
     });
 
     // ===================== STEP 4: CONFIRM & GENERATE =====================
@@ -437,6 +479,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const titleVal = document.getElementById('project-title').value.trim() || 'Untitled';
         document.getElementById('confirm-title').textContent = titleVal.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        // Show transcript info in confirm card if provided
+        const userTranscript = document.getElementById('user-transcript').value.trim();
+        const confirmTranscriptRow = document.getElementById('confirm-transcript-row');
+        if (userTranscript) {
+            const wordCount = userTranscript.split(/\s+/).filter(Boolean).length;
+            document.getElementById('confirm-transcript').textContent = `Pasted (${wordCount} words) \u2014 skipping AssemblyAI`;
+            confirmTranscriptRow.classList.remove('hidden');
+        } else {
+            confirmTranscriptRow.classList.add('hidden');
+        }
     }
 
     document.getElementById('confirm-back').addEventListener('click', () => goToStep('upload'));
@@ -457,6 +510,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const charInstructions = document.getElementById('character-instructions').value.trim();
         if (charInstructions) {
             formData.append('character_instructions', charInstructions);
+        }
+        const userTranscriptText = document.getElementById('user-transcript').value.trim();
+        if (userTranscriptText) {
+            formData.append('user_transcript', userTranscriptText);
         }
 
         try {
