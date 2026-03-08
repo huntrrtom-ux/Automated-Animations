@@ -1253,70 +1253,6 @@ def get_audio_duration(filepath):
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     return float(result.stdout.strip())
 
-def split_audio_for_whisper(filepath, max_size_mb=24):
-    file_size = os.path.getsize(filepath)
-    max_bytes = max_size_mb * 1024 * 1024
-    if file_size <= max_bytes:
-        return [filepath]
-    duration = get_audio_duration(filepath)
-    num_chunks = math.ceil(file_size / max_bytes)
-    chunk_duration = duration / num_chunks
-    chunks = []
-    for i in range(num_chunks):
-        start = i * chunk_duration
-        chunk_path = os.path.join(os.path.dirname(filepath), f'chunk_{i}.mp3')
-        cmd = ['ffmpeg', '-y', '-i', filepath, '-ss', str(start), '-t', str(chunk_duration),
-               '-c:a', 'libmp3lame', '-b:a', '128k', chunk_path]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
-        chunks.append(chunk_path)
-    return chunks
-
-def transcribe_audio(filepath, session_id):
-    emit_progress(session_id, 'transcription', 2, 'Preparing audio...')
-    client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    chunks = split_audio_for_whisper(filepath)
-    all_segments = []
-    full_text_parts = []
-    audio_duration = get_audio_duration(filepath)
-    
-    for ci, chunk_path in enumerate(chunks):
-        emit_progress(session_id, 'transcription', int(2 + 12 * ci / len(chunks)),
-                     f'Transcribing part {ci+1}/{len(chunks)}...')
-        # Calculate the true time offset based on chunk position, not Whisper's last segment
-        if len(chunks) > 1:
-            chunk_duration = audio_duration / len(chunks)
-            time_offset = ci * chunk_duration
-        else:
-            time_offset = 0.0
-        
-        with open(chunk_path, 'rb') as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1", file=audio_file,
-                response_format="verbose_json", timestamp_granularities=["segment"]
-            )
-        chunk_seg_count = 0
-        if hasattr(transcript, 'segments') and transcript.segments:
-            for seg in transcript.segments:
-                start = (seg.start if hasattr(seg, 'start') else seg['start']) + time_offset
-                end = (seg.end if hasattr(seg, 'end') else seg['end']) + time_offset
-                text = (seg.text if hasattr(seg, 'text') else seg['text']).strip()
-                if text:  # skip empty segments
-                    all_segments.append({'start': start, 'end': end, 'text': text})
-                    chunk_seg_count += 1
-        full_text_parts.append(transcript.text if hasattr(transcript, 'text') else str(transcript))
-        logger.info(f"Whisper chunk {ci+1}/{len(chunks)}: {chunk_seg_count} segments, offset={time_offset:.1f}s")
-        if chunk_path != filepath and os.path.exists(chunk_path):
-            os.remove(chunk_path)
-    
-    # Log coverage
-    if all_segments:
-        last_seg_end = all_segments[-1]['end']
-        logger.info(f"Whisper complete: {len(all_segments)} segments, last segment ends at {last_seg_end:.1f}s (audio={audio_duration:.1f}s)")
-        if last_seg_end < audio_duration - 10:
-            logger.warning(f"Whisper transcription ends {audio_duration - last_seg_end:.1f}s before audio end!")
-    
-    emit_progress(session_id, 'transcription', 15, f'Transcribed {len(all_segments)} segments')
-    return {'full_text': ' '.join(full_text_parts), 'segments': all_segments}
 
 
 def transcribe_audio_assemblyai(filepath, session_id):
@@ -1394,12 +1330,63 @@ def transcribe_audio_assemblyai(filepath, session_id):
     if chapters:
         logger.info(f"AssemblyAI chapters: {len(chapters)} topic boundaries detected")
 
+    # Extract word-level timestamps for precise scene boundary placement
+    words = []
+    for w in poll_data.get('words', []) or []:
+        words.append({
+            'text': w['text'],
+            'start': w['start'] / 1000.0,  # ms to seconds
+            'end': w['end'] / 1000.0,
+            'confidence': w.get('confidence', 1.0)
+        })
+    logger.info(f"AssemblyAI words: {len(words)} word-level timestamps extracted")
+
+    # Detect natural pauses from word gaps (VAD)
+    if words:
+        pauses = detect_pauses_from_words(words)
+        logger.info(f"Detected {len(pauses)} natural pauses (>=300ms gaps between words)")
+    else:
+        logger.warning("No word-level timestamps available; scene boundaries will use sentence-level only")
+        pauses = []
+
     logger.info(f"AssemblyAI complete: {len(segments)} segments")
     if segments:
         logger.info(f"AssemblyAI range: first={segments[0]['start']:.1f}s, last ends={segments[-1]['end']:.1f}s")
 
     emit_progress(session_id, 'transcription', 15, f'Transcribed {len(segments)} segments')
-    return {'full_text': poll_data.get('text', ''), 'segments': segments, 'chapters': chapters}
+    return {'full_text': poll_data.get('text', ''), 'segments': segments, 'chapters': chapters, 'words': words, 'pauses': pauses}
+
+
+def detect_pauses_from_words(words, min_pause=0.3, max_pause=5.0):
+    """Detect natural pauses from gaps between consecutive word timestamps.
+
+    Uses word-level timing from AssemblyAI as a VAD signal. Gaps between
+    consecutive words that exceed min_pause indicate natural speech pauses —
+    ideal points for scene boundary cuts.
+    """
+    pauses = []
+    for i in range(1, len(words)):
+        gap = words[i]['start'] - words[i - 1]['end']
+        if gap >= min_pause and gap <= max_pause:
+            # Score: longer pauses and sentence-ending punctuation score higher
+            base_score = min(gap / 1.0, 1.0)  # normalize: 1s gap = 1.0
+
+            prev_text = words[i - 1]['text'].strip()
+            if prev_text.endswith(('.', '!', '?')):
+                base_score = min(base_score + 0.3, 1.0)
+            elif prev_text.endswith((',', ';', ':')):
+                base_score = min(base_score + 0.1, 1.0)
+
+            pauses.append({
+                'time': (words[i - 1]['end'] + words[i]['start']) / 2.0,
+                'duration': gap,
+                'before_word_end': words[i - 1]['end'],
+                'after_word_start': words[i]['start'],
+                'score': round(base_score, 3)
+            })
+
+    pauses.sort(key=lambda p: p['time'])
+    return pauses
 
 
 # ===================== SCENE DETECTION =====================
@@ -1587,6 +1574,8 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
         scene_model = "gpt-4o"
         logger.info("Scene detection using GPT-4o (no GEMINI_API_KEY set)")
     segments = transcript_data['segments']
+    words = transcript_data.get('words', [])
+    pauses = transcript_data.get('pauses', [])
     # FIX 1: Smaller chunks — 50 segments (~3-4 min) so Gemini can't skip sections
     CHUNK_SIZE = 50
     all_scenes = []
@@ -1901,45 +1890,89 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
             logger.warning(f"Gemini left {audio_duration - last_scene_end:.1f}s uncovered at end of audio!")
     
     # ===================== POST-PROCESSING =====================
-    # Timestamps are now derived directly from Whisper segments, so they should be accurate.
-    # We just need to: enforce continuity, split oversized scenes, and fill any gaps.
-    
+    # Timestamps are derived from AssemblyAI segments with word-level precision.
+    # We snap boundaries to natural pauses (VAD), enforce continuity, split oversized scenes, and fill gaps.
+
     if all_scenes and segments:
         logger.info(f"=== POST-PROCESSING: {len(all_scenes)} scenes from segment-anchored approach ===")
 
         # Sort scenes by start_time to ensure correct order
         all_scenes.sort(key=lambda s: s['start_time'])
 
-        # ANTI-DRIFT: Snap every scene boundary to the nearest transcript segment boundary.
-        # This prevents scenes from drifting away from what the narrator is actually saying.
+        # Build boundary candidates from multiple sources (3-tier priority)
+        # Tier 1 (best): Natural pauses detected from word gaps
+        pause_points = {p['before_word_end']: p for p in pauses}
+
+        # Tier 2 (good): Word boundaries (every word start/end)
+        word_boundaries = sorted(set(
+            [w['start'] for w in words] + [w['end'] for w in words]
+        )) if words else []
+
+        # Tier 3 (fallback): Sentence boundaries
         seg_starts = sorted(set(s['start'] for s in segments))
         seg_ends = sorted(set(s['end'] for s in segments))
         seg_boundaries = sorted(set(seg_starts + seg_ends))
 
-        def snap_to_boundary(t, boundaries):
-            """Snap a timestamp to the nearest segment boundary."""
-            if not boundaries:
-                return t
-            idx = bisect.bisect_left(boundaries, t)
-            candidates = []
-            if idx > 0:
-                candidates.append(boundaries[idx - 1])
-            if idx < len(boundaries):
-                candidates.append(boundaries[idx])
-            return min(candidates, key=lambda b: abs(b - t))
+        def snap_to_best_boundary(t, search_radius=1.0):
+            """Snap a timestamp to the best nearby cut point.
+
+            Priority: natural pause > word boundary > sentence boundary.
+            """
+            # Tier 1: Check for natural pauses near t
+            best_pause = None
+            best_pause_score = -1
+            for pause in pauses:
+                dist = abs(pause['before_word_end'] - t)
+                if dist <= search_radius:
+                    effective_score = pause['score'] * (1.0 - dist / search_radius)
+                    if effective_score > best_pause_score:
+                        best_pause = pause
+                        best_pause_score = effective_score
+
+            if best_pause and best_pause_score > 0.2:
+                return best_pause['before_word_end'], 'pause'
+
+            # Tier 2: Nearest word boundary
+            if word_boundaries:
+                idx = bisect.bisect_left(word_boundaries, t)
+                candidates = []
+                if idx > 0:
+                    candidates.append(word_boundaries[idx - 1])
+                if idx < len(word_boundaries):
+                    candidates.append(word_boundaries[idx])
+                nearest_word = min(candidates, key=lambda b: abs(b - t))
+                if abs(nearest_word - t) <= search_radius:
+                    return nearest_word, 'word'
+
+            # Tier 3: Sentence boundary (fallback)
+            if seg_boundaries:
+                idx = bisect.bisect_left(seg_boundaries, t)
+                candidates = []
+                if idx > 0:
+                    candidates.append(seg_boundaries[idx - 1])
+                if idx < len(seg_boundaries):
+                    candidates.append(seg_boundaries[idx])
+                return min(candidates, key=lambda b: abs(b - t)), 'sentence'
+
+            return t, 'none'
 
         snap_fixes = 0
+        snap_types = {'pause': 0, 'word': 0, 'sentence': 0, 'none': 0}
         for scene in all_scenes:
-            snapped_start = snap_to_boundary(scene['start_time'], seg_boundaries)
-            snapped_end = snap_to_boundary(scene['end_time'], seg_boundaries)
+            snapped_start, stype_s = snap_to_best_boundary(scene['start_time'])
+            snapped_end, stype_e = snap_to_best_boundary(scene['end_time'])
             if snapped_start != scene['start_time'] or snapped_end != scene['end_time']:
                 snap_fixes += 1
+            snap_types[stype_s] += 1
+            snap_types[stype_e] += 1
             # Only snap if it doesn't create a zero/negative duration
             if snapped_end > snapped_start:
                 scene['start_time'] = snapped_start
                 scene['end_time'] = snapped_end
         if snap_fixes:
-            logger.info(f"Snapped {snap_fixes} scene boundaries to transcript segments (anti-drift)")
+            logger.info(f"Snapped {snap_fixes} scene boundaries "
+                        f"(pause={snap_types['pause']}, word={snap_types['word']}, "
+                        f"sentence={snap_types['sentence']})")
 
         # Re-sort after snapping
         all_scenes.sort(key=lambda s: s['start_time'])
@@ -1985,21 +2018,48 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 part_dur = dur / num_parts
                 base_desc = scene['visual_description']
                 scene_segs = [s for s in segments if s['end'] > scene['start_time'] and s['start'] < scene['end_time']]
-                
-                for p in range(num_parts):
-                    part_start = scene['start_time'] + p * part_dur
-                    part_end = scene['start_time'] + (p + 1) * part_dur
-                    
+
+                # Find split points using natural pauses within this scene's range
+                scene_pauses = [p for p in pauses
+                                if scene['start_time'] < p['time'] < scene['end_time']]
+                scene_pauses.sort(key=lambda p: p['score'], reverse=True)
+
+                # Pick top (num_parts - 1) split points, ensuring minimum spacing
+                split_points = []
+                for pause in scene_pauses:
+                    t = pause['before_word_end']
+                    too_close = any(abs(t - sp) < target_dur * 0.5 for sp in split_points)
+                    if not too_close:
+                        split_points.append(t)
+                    if len(split_points) >= num_parts - 1:
+                        break
+
+                # If not enough pauses, fall back to arithmetic + word snapping
+                if len(split_points) < num_parts - 1:
+                    for p_idx in range(1, num_parts):
+                        candidate = scene['start_time'] + p_idx * part_dur
+                        already_covered = any(abs(candidate - sp) < target_dur * 0.3 for sp in split_points)
+                        if not already_covered:
+                            snapped, _ = snap_to_best_boundary(candidate, search_radius=2.0)
+                            split_points.append(snapped)
+
+                split_points.sort()
+                boundaries = [scene['start_time']] + split_points + [scene['end_time']]
+
+                for p in range(len(boundaries) - 1):
+                    part_start = boundaries[p]
+                    part_end = boundaries[p + 1]
+
                     part_segs = [s for s in scene_segs if s['end'] > part_start and s['start'] < part_end]
                     part_text = ' '.join(s['text'].strip() for s in part_segs) if part_segs else ''
-                    
+
                     if p == 0:
                         part_desc = base_desc
                     elif part_text:
                         part_desc = f"A new visual perspective illustrating: {part_text[:200]}"
                     else:
                         part_desc = f"{base_desc} — from a different angle and composition"
-                    
+
                     part_scene = {
                         'scene_number': len(split_scenes) + 1,
                         'start_time': part_start,
@@ -2013,7 +2073,7 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                     if p == 0 and scene.get('topic_title'):
                         part_scene['topic_title'] = scene['topic_title']
                     split_scenes.append(part_scene)
-                logger.info(f"Split {dur:.1f}s scene into {num_parts} parts")
+                logger.info(f"Split {dur:.1f}s scene into {len(boundaries) - 1} parts (pause-aware)")
             else:
                 scene['scene_number'] = len(split_scenes) + 1
                 split_scenes.append(scene)
@@ -3344,15 +3404,19 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
 
         check_cancelled(session_id)
 
-        if ASSEMBLYAI_API_KEY:
-            try:
-                transcript_data = transcribe_audio_assemblyai(filepath, session_id)
-            except Exception as e:
-                logger.warning(f"AssemblyAI failed ({e}), falling back to Whisper")
-                emit_progress(session_id, 'transcription', 5, 'AssemblyAI failed — using Whisper...')
-                transcript_data = transcribe_audio(filepath, session_id)
-        else:
-            transcript_data = transcribe_audio(filepath, session_id)
+        if not ASSEMBLYAI_API_KEY:
+            error_msg = "ASSEMBLYAI_API_KEY environment variable is required for transcription"
+            logger.error(error_msg)
+            emit_progress(session_id, 'error', 0, error_msg)
+            return {'error': error_msg}
+
+        try:
+            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
+        except Exception as e:
+            error_msg = f"Transcription failed: {e}"
+            logger.error(error_msg)
+            emit_progress(session_id, 'error', 0, error_msg)
+            return {'error': error_msg}
         check_cancelled(session_id)
 
         # Resolve character instructions: per-video override > channel default
