@@ -3418,12 +3418,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
         check_cancelled(session_id)
 
         if ASSEMBLYAI_API_KEY:
-            try:
-                transcript_data = transcribe_audio_assemblyai(filepath, session_id)
-            except Exception as e:
-                logger.warning(f"AssemblyAI failed ({e}), falling back to Whisper")
-                emit_progress(session_id, 'transcription', 5, 'AssemblyAI failed — using Whisper...')
-                transcript_data = transcribe_audio(filepath, session_id)
+            transcript_data = transcribe_audio_assemblyai(filepath, session_id)
         else:
             transcript_data = transcribe_audio(filepath, session_id)
         check_cancelled(session_id)
