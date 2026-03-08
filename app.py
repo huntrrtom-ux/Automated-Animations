@@ -2759,7 +2759,7 @@ def generate_image_with_recipe(prompt, output_path, session_id, scene_num, whisk
 
 
 # ===================== ANIMATION =====================
-def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
+def animate_image_whisk(image_info, script, output_path, session_id, scene_num, motion_override=None):
     # Try reserved key first, but if it's cooling down (quota exhausted / rate limited),
     # immediately switch to a different key — animation uses rawBytes so any key works
     key = whisk_pool.get_reserved_key(session_id)
@@ -2784,15 +2784,18 @@ def animate_image_whisk(image_info, script, output_path, session_id, scene_num):
     # other accounts would get 404 since media IDs are account-specific
     media_id = image_info.get("media_id", "") if key['index'] == original_key_index else ""
     # Build motion instructions so Veo produces actual animation, not static output
-    motion_instructions = (
-        "Animate this scene with smooth, cinematic motion. "
-        "Add subtle camera movement (slow pan, gentle zoom, or drift). "
-        "Animate all elements naturally: flowing hair, swaying foliage, drifting clouds, "
-        "flickering lights, moving water, floating particles. "
-        "Characters should have lifelike micro-movements: breathing, blinking, slight head turns, "
-        "hand gestures, shifting weight. "
-        "The scene must feel alive and dynamic — never static or frozen."
-    )
+    if motion_override:
+        motion_instructions = motion_override
+    else:
+        motion_instructions = (
+            "Animate this scene with smooth, cinematic motion. "
+            "Add subtle camera movement (slow pan, gentle zoom, or drift). "
+            "Animate all elements naturally: flowing hair, swaying foliage, drifting clouds, "
+            "flickering lights, moving water, floating particles. "
+            "Characters should have lifelike micro-movements: breathing, blinking, slight head turns, "
+            "hand gestures, shifting weight. "
+            "The scene must feel alive and dynamic — never static or frozen."
+        )
     animate_data = {
         "clientContext": {"sessionId": session_ts, "tool": "BACKBONE", "workflowId": image_info.get("workflow_id", str(uuid.uuid4()))},
         "loopVideo": False, "modelKey": "", "modelNameType": "VEO_3_1_I2V_12STEP",
@@ -3708,6 +3711,23 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             if first_anim and last_anim:
                 logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
 
+        # Botanical: force first content scene to hyper-realistic animated flower
+        if format_config.get('base') == 'botanical':
+            first_content = next((s for s in scenes if not s.get('is_title_card')), None)
+            if first_content:
+                first_content['hyper_realistic'] = True
+                first_content['is_video'] = True
+                first_content['has_subject'] = False
+                first_content['botanical_hero_flower'] = True
+                # Replace description with a simple flower close-up referencing the
+                # plant from the original description so it stays on-topic
+                orig = first_content.get('visual_description', '')
+                first_content['visual_description'] = (
+                    f"Extreme close-up of a single beautiful flower in its natural habitat, "
+                    f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
+                    f"Context: {orig}"
+                )
+                logger.info(f"Botanical: scene {first_content.get('scene_number')} → hyper-realistic hero flower + Veo")
         # For subject_mode 'all', Gemini already has strong guidance to include the
         # character in ~80% of scenes.  We no longer force has_subject=True on every
         # scene because scenes that don't naturally feature a person (landscapes,
@@ -3917,9 +3937,17 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             max_anim_retries = 5
             animated = False
 
+            # Botanical hero flower: use soft, minimal motion for natural footage
+            scene_motion = None
+            if scene.get('botanical_hero_flower'):
+                scene_motion = (
+                    "Gentle breeze softly moving petals, very subtle natural sway. "
+                    "Slow, steady camera. Natural outdoor ambient motion only."
+                )
+
             for anim_attempt in range(max_anim_retries):
                 try:
-                    animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num)
+                    animated = animate_image_whisk(image_info, scene['visual_description'], video_path, session_id, scene_num, motion_override=scene_motion)
                 except Exception as e:
                     logger.error(f"Animation error scene {scene_num} (attempt {anim_attempt+1}/{max_anim_retries}): {e}")
                     animated = False
