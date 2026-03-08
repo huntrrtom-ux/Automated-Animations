@@ -1395,7 +1395,14 @@ def transcribe_audio_assemblyai(filepath, session_id):
 
     poll_headers = aai_headers
     start = time.time()
-    TIMEOUT = 1800  # 30 minutes
+    # Scale timeout to audio length: 3x duration with floor of 180s and cap of 600s.
+    # Prevents waiting 30 min for jobs that AssemblyAI will never finish.
+    try:
+        _audio_dur = get_audio_duration(filepath)
+    except Exception:
+        _audio_dur = 600  # fallback if probe fails
+    TIMEOUT = min(max(int(_audio_dur * 3), 180), 600)
+    logger.info(f"AssemblyAI poll timeout set to {TIMEOUT}s (audio {_audio_dur:.0f}s)")
     poll_data = None
 
     while True:
