@@ -3910,6 +3910,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 sc['hyper_realistic'] = True
                 sc['has_subject'] = False
                 orig = sc.get('visual_description', '')
+                # Strip any text/number references from the description
+                cleaned = re.sub(r'(?i)\b(number|#|no\.?)\s*\d+\b', '', orig)
+                cleaned = re.sub(r'(?i)\bat\s+(number|#|no\.?)\s*\d+\b', '', cleaned)
+                cleaned = re.sub(r'(?i)\b(text|words?|label|caption|title|sign|letter|writing|subtitle|heading)\b', '', cleaned)
+                cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+                no_text_suffix = " Absolutely no text, words, numbers, labels, titles, captions, signs, letters, or writing of any kind anywhere in the image."
                 if idx == 0:
                     # First scene: hero flower + Veo animation
                     sc['is_video'] = True
@@ -3917,16 +3923,16 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     sc['visual_description'] = (
                         f"Extreme close-up of a single beautiful flower in its natural habitat, "
                         f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
-                        f"Context: {orig}"
+                        f"Context: {cleaned}{no_text_suffix}"
                     )
-                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo")
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo (no text)")
                 else:
                     # Scenes 2-3: hyper-realistic plant stills
                     sc['visual_description'] = (
                         f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
-                        f"shallow depth of field, natural lighting. {orig}"
+                        f"shallow depth of field, natural lighting. {cleaned}{no_text_suffix}"
                     )
-                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still (no text)")
 
             # Force plant_intro scenes to hyper-realistic with no text/numbers
             first_3_nums = {sc.get('scene_number') for sc in content_scenes[:3]}
@@ -4047,7 +4053,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
             # Hyper-realistic override for botanical scenes (replaces illustration style)
             if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
-                prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
+                prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. No text, no words, no labels, no captions, no writing anywhere in the image. {prompt}"
             elif image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
             if resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
