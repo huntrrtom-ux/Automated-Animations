@@ -1793,11 +1793,12 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "   Do NOT mix plants from different sections.\n"
                 "4. Include botanical details visible in the scene: leaf shape, flower color, growth habit, "
                 "stem texture, root structure — whatever the narrator is discussing.\n\n"
-                "SUBSCRIBE CALL-TO-ACTION DETECTION:\n"
-                "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action for the channel:\n"
-                "- Mark that scene with: \"is_subscribe_cta\": true\n"
-                "- The visual_description for CTA scenes will be overridden — just set it to 'subscribe call to action'\n"
-                "- CTA scenes should ALWAYS have has_subject: true\n\n"
+                "CALL-TO-ACTION / SUBSCRIBE MENTIONS:\n"
+                "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action:\n"
+                "- Do NOT create any subscribe button, CTA graphic, or non-plant imagery.\n"
+                "- Keep the visual_description focused on the SAME plant being discussed.\n"
+                "- Set has_subject: true so the subject character appears smiling alongside the plants.\n"
+                "- The scene should feel warm and inviting while staying fully botanical.\n\n"
                 "HYPER-REALISTIC DETAIL SHOTS:\n"
                 "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
                 "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
@@ -3854,19 +3855,25 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             prompt = scene['visual_description']
 
-            # Subscribe CTA scenes: override prompt with subject pointing at subscribe button
+            # Subscribe CTA scenes: override prompt depending on format
             if scene.get('is_subscribe_cta'):
-                prompt = (
-                    "A simple, clean image with a plain white background. "
-                    "The main character is standing to one side, enthusiastically pointing "
-                    "with one hand toward a large, floating YouTube subscribe button. "
-                    "The subscribe button is red with white text reading 'SUBSCRIBE', "
-                    "hovering in the air next to the character. "
-                    "The character's other hand gives a thumbs up. "
-                    "Clean minimal composition, bright and inviting."
-                )
-                scene_has_subject = True  # Always include subject for CTA
-                logger.info(f"Scene {scene_num}: Subscribe CTA — using override prompt")
+                fmt_base = format_config.get('base', '') if isinstance(format_config, dict) else ''
+                if fmt_base == 'botanical':
+                    # Botanical: stay plant-focused, just add subject smiling
+                    scene_has_subject = True
+                    logger.info(f"Scene {scene_num}: CTA mention (botanical) — keeping plant imagery with subject")
+                else:
+                    prompt = (
+                        "A simple, clean image with a plain white background. "
+                        "The main character is standing to one side, enthusiastically pointing "
+                        "with one hand toward a large, floating YouTube subscribe button. "
+                        "The subscribe button is red with white text reading 'SUBSCRIBE', "
+                        "hovering in the air next to the character. "
+                        "The character's other hand gives a thumbs up. "
+                        "Clean minimal composition, bright and inviting."
+                    )
+                    scene_has_subject = True  # Always include subject for CTA
+                    logger.info(f"Scene {scene_num}: Subscribe CTA — using override prompt")
 
             # Content safety: sanitize unsafe terms for pregnancy/medical channels
             if topic_title_cards_enabled:
