@@ -1382,8 +1382,6 @@ def transcribe_audio_assemblyai(filepath, session_id):
             raise Exception(f"AssemblyAI transcription timed out after {TIMEOUT}s")
 
         time.sleep(5)
-        emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
-                      f'Transcribing with AssemblyAI... ({elapsed}s)')
 
         try:
             resp = req.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
@@ -1391,9 +1389,14 @@ def transcribe_audio_assemblyai(filepath, session_id):
             poll_data = resp.json()
         except Exception as e:
             logger.warning(f"AssemblyAI poll error: {e}")
+            emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
+                          f'Transcribing with AssemblyAI... ({elapsed}s)')
             continue
 
         status = poll_data.get('status', '')
+        status_label = status or 'unknown'
+        emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
+                      f'Transcribing with AssemblyAI... ({elapsed}s) [{status_label}]')
         if status == 'completed':
             logger.info(f"AssemblyAI completed in {elapsed}s")
             break
