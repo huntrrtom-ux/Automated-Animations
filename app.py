@@ -1317,12 +1317,14 @@ def transcribe_audio_assemblyai(filepath, session_id):
         headers={**aai_headers, "content-type": "application/json"},
         json={
             "audio_url": upload_url,
-            "speech_model": "best",
+            "speech_models": ["universal-3-pro", "universal-2"],
             "language_detection": True,
             "auto_chapters": True,
         },
         timeout=30,
     )
+    if not submit_resp.ok:
+        logger.error(f"AssemblyAI submit failed ({submit_resp.status_code}): {submit_resp.text}")
     submit_resp.raise_for_status()
     transcript_id = submit_resp.json()["id"]
     logger.info(f"AssemblyAI job submitted: {transcript_id}")
