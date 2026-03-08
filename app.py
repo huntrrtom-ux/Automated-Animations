@@ -1293,20 +1293,41 @@ def get_audio_duration(filepath):
 
 def transcribe_audio_assemblyai(filepath, session_id):
     """Transcribe audio using AssemblyAI for more accurate timestamps."""
-    import assemblyai as aai
-    aai.settings.api_key = ASSEMBLYAI_API_KEY
+    aai_headers = {"authorization": ASSEMBLYAI_API_KEY}
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
-    config = aai.TranscriptionConfig(speech_models=["universal-3-pro"], language_detection=True, auto_chapters=True)
-    transcriber = aai.Transcriber()
+    # Upload file using requests (gevent-safe) instead of assemblyai SDK (uses httpx, not gevent-safe)
+    logger.info(f"AssemblyAI: uploading {filepath}")
+    with open(filepath, 'rb') as f:
+        upload_resp = req.post(
+            "https://api.assemblyai.com/v2/upload",
+            headers=aai_headers,
+            data=f,
+            timeout=300,
+        )
+    upload_resp.raise_for_status()
+    upload_url = upload_resp.json()["upload_url"]
+    logger.info(f"AssemblyAI: upload complete -> {upload_url[:80]}...")
+
     emit_progress(session_id, 'transcription', 5, 'Submitting to AssemblyAI...')
 
-    # Use submit() + manual polling with timeout instead of blocking transcribe()
-    transcript = transcriber.submit(filepath, config=config)
-    transcript_id = transcript.id
+    # Submit transcription job using requests
+    submit_resp = req.post(
+        "https://api.assemblyai.com/v2/transcript",
+        headers={**aai_headers, "content-type": "application/json"},
+        json={
+            "audio_url": upload_url,
+            "speech_model": "best",
+            "language_detection": True,
+            "auto_chapters": True,
+        },
+        timeout=30,
+    )
+    submit_resp.raise_for_status()
+    transcript_id = submit_resp.json()["id"]
     logger.info(f"AssemblyAI job submitted: {transcript_id}")
 
-    poll_headers = {"authorization": ASSEMBLYAI_API_KEY}
+    poll_headers = aai_headers
     start = time.time()
     TIMEOUT = 1800  # 30 minutes
     poll_data = None
@@ -1318,8 +1339,6 @@ def transcribe_audio_assemblyai(filepath, session_id):
             raise Exception(f"AssemblyAI transcription timed out after {TIMEOUT}s")
 
         time.sleep(5)
-        emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
-                      f'Transcribing with AssemblyAI... ({elapsed}s)')
 
         try:
             resp = req.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
@@ -1327,9 +1346,14 @@ def transcribe_audio_assemblyai(filepath, session_id):
             poll_data = resp.json()
         except Exception as e:
             logger.warning(f"AssemblyAI poll error: {e}")
+            emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
+                          f'Transcribing with AssemblyAI... ({elapsed}s)')
             continue
 
         status = poll_data.get('status', '')
+        status_label = status or 'unknown'
+        emit_progress(session_id, 'transcription', min(5 + elapsed // 30, 14),
+                      f'Transcribing with AssemblyAI... ({elapsed}s) [{status_label}]')
         if status == 'completed':
             logger.info(f"AssemblyAI completed in {elapsed}s")
             break
@@ -1758,11 +1782,12 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "   Do NOT mix plants from different sections.\n"
                 "4. Include botanical details visible in the scene: leaf shape, flower color, growth habit, "
                 "stem texture, root structure — whatever the narrator is discussing.\n\n"
-                "SUBSCRIBE CALL-TO-ACTION DETECTION:\n"
-                "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action for the channel:\n"
-                "- Mark that scene with: \"is_subscribe_cta\": true\n"
-                "- The visual_description for CTA scenes will be overridden — just set it to 'subscribe call to action'\n"
-                "- CTA scenes should ALWAYS have has_subject: true\n\n"
+                "CALL-TO-ACTION / SUBSCRIBE MENTIONS:\n"
+                "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action:\n"
+                "- Do NOT create any subscribe button, CTA graphic, or non-plant imagery.\n"
+                "- Keep the visual_description focused on the SAME plant being discussed.\n"
+                "- Set has_subject: true so the subject character appears smiling alongside the plants.\n"
+                "- The scene should feel warm and inviting while staying fully botanical.\n\n"
                 "HYPER-REALISTIC DETAIL SHOTS:\n"
                 "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
                 "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
@@ -3811,23 +3836,30 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             if first_anim and last_anim:
                 logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
 
-        # Botanical: force first content scene to hyper-realistic animated flower
+        # Botanical: force first 3 content scenes to hyper-photorealistic plant imagery
         if format_config.get('base') == 'botanical':
-            first_content = next((s for s in scenes if not s.get('is_title_card')), None)
-            if first_content:
-                first_content['hyper_realistic'] = True
-                first_content['is_video'] = True
-                first_content['has_subject'] = False
-                first_content['botanical_hero_flower'] = True
-                # Replace description with a simple flower close-up referencing the
-                # plant from the original description so it stays on-topic
-                orig = first_content.get('visual_description', '')
-                first_content['visual_description'] = (
-                    f"Extreme close-up of a single beautiful flower in its natural habitat, "
-                    f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
-                    f"Context: {orig}"
-                )
-                logger.info(f"Botanical: scene {first_content.get('scene_number')} → hyper-realistic hero flower + Veo")
+            content_scenes = [s for s in scenes if not s.get('is_title_card')]
+            for idx, sc in enumerate(content_scenes[:3]):
+                sc['hyper_realistic'] = True
+                sc['has_subject'] = False
+                orig = sc.get('visual_description', '')
+                if idx == 0:
+                    # First scene: hero flower + Veo animation
+                    sc['is_video'] = True
+                    sc['botanical_hero_flower'] = True
+                    sc['visual_description'] = (
+                        f"Extreme close-up of a single beautiful flower in its natural habitat, "
+                        f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
+                        f"Context: {orig}"
+                    )
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo")
+                else:
+                    # Scenes 2-3: hyper-realistic plant stills
+                    sc['visual_description'] = (
+                        f"Hyper-photorealistic close-up botanical photograph, stunning natural detail, "
+                        f"shallow depth of field, natural lighting. {orig}"
+                    )
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
         # For subject_mode 'all', Gemini already has strong guidance to include the
         # character in ~80% of scenes.  We no longer force has_subject=True on every
         # scene because scenes that don't naturally feature a person (landscapes,
@@ -3894,19 +3926,25 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
             prompt = scene['visual_description']
 
-            # Subscribe CTA scenes: override prompt with subject pointing at subscribe button
+            # Subscribe CTA scenes: override prompt depending on format
             if scene.get('is_subscribe_cta'):
-                prompt = (
-                    "A simple, clean image with a plain white background. "
-                    "The main character is standing to one side, enthusiastically pointing "
-                    "with one hand toward a large, floating YouTube subscribe button. "
-                    "The subscribe button is red with white text reading 'SUBSCRIBE', "
-                    "hovering in the air next to the character. "
-                    "The character's other hand gives a thumbs up. "
-                    "Clean minimal composition, bright and inviting."
-                )
-                scene_has_subject = True  # Always include subject for CTA
-                logger.info(f"Scene {scene_num}: Subscribe CTA — using override prompt")
+                fmt_base = format_config.get('base', '') if isinstance(format_config, dict) else ''
+                if fmt_base == 'botanical':
+                    # Botanical: stay plant-focused, just add subject smiling
+                    scene_has_subject = True
+                    logger.info(f"Scene {scene_num}: CTA mention (botanical) — keeping plant imagery with subject")
+                else:
+                    prompt = (
+                        "A simple, clean image with a plain white background. "
+                        "The main character is standing to one side, enthusiastically pointing "
+                        "with one hand toward a large, floating YouTube subscribe button. "
+                        "The subscribe button is red with white text reading 'SUBSCRIBE', "
+                        "hovering in the air next to the character. "
+                        "The character's other hand gives a thumbs up. "
+                        "Clean minimal composition, bright and inviting."
+                    )
+                    scene_has_subject = True  # Always include subject for CTA
+                    logger.info(f"Scene {scene_num}: Subscribe CTA — using override prompt")
 
             # Content safety: sanitize unsafe terms for pregnancy/medical channels
             if topic_title_cards_enabled:
