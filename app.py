@@ -1808,6 +1808,13 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "- Keep the visual_description focused on the SAME plant being discussed.\n"
                 "- Set has_subject: true so the subject character appears smiling alongside the plants.\n"
                 "- The scene should feel warm and inviting while staying fully botanical.\n\n"
+                "PLANT INTRO SCENES:\n"
+                "When the narrator transitions to a NEW plant (e.g. 'at number 18', 'next up', 'number 5 is', "
+                "or simply starts discussing a different plant), mark the FIRST scene of that new plant with "
+                "\"plant_intro\": true in the JSON.\n"
+                "This scene MUST have has_subject: false and visual_description must contain ONLY a pure botanical "
+                "close-up of the new plant — absolutely NO text, numbers, labels, rankings, or list positions "
+                "in the description. Even if the narrator says 'at number 18', the image should show ONLY the plant.\n\n"
                 "HYPER-REALISTIC DETAIL SHOTS:\n"
                 "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
                 "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
@@ -3800,6 +3807,25 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                         f"shallow depth of field, natural lighting. {orig}"
                     )
                     logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
+
+            # Force plant_intro scenes to hyper-realistic with no text/numbers
+            first_3_nums = {sc.get('scene_number') for sc in content_scenes[:3]}
+            for sc in content_scenes:
+                if sc.get('plant_intro') and sc.get('scene_number') not in first_3_nums:
+                    sc['hyper_realistic'] = True
+                    sc['has_subject'] = False
+                    orig = sc.get('visual_description', '')
+                    # Strip any text/number references from the description
+                    import re
+                    cleaned = re.sub(r'(?i)\b(number|#|no\.?)\s*\d+\b', '', orig)
+                    cleaned = re.sub(r'(?i)\bat\s+(number|#|no\.?)\s*\d+\b', '', cleaned)
+                    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+                    sc['visual_description'] = (
+                        f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
+                        f"shallow depth of field, natural lighting. {cleaned}"
+                    )
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → plant intro hyper-realistic (no text)")
+
         # For subject_mode 'all', Gemini already has strong guidance to include the
         # character in ~80% of scenes.  We no longer force has_subject=True on every
         # scene because scenes that don't naturally feature a person (landscapes,
