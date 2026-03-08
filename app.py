@@ -1598,7 +1598,16 @@ def get_format_subject_rules(format_config, has_subject):
             "  BAD: 'the main character appears' (too vague)\n"
             "- NEVER describe facial expressions, emotions, or face details — focus ONLY on "
             "body position, hand actions, posture, and interaction with the environment\n"
-            "- The character should feel like the LEAD of a TV show — always present, always in the action\n"
+            "- The character should feel like the LEAD of a TV show — always present, always in the action\n\n"
+            "SECONDARY / EXTRA CHARACTERS:\n"
+            "When a scene requires other people (e.g. an older man, a guard, a shopkeeper), "
+            "do NOT describe them as entirely new standalone characters. Instead:\n"
+            "- Describe them relative to the main character's visual style (same art style, same world)\n"
+            "- Give them UNIQUE distinguishing features (age, build, scars, clothing differences) "
+            "but keep the same visual rendering quality and style as the protagonist\n"
+            "- Example: 'an older, weathered version of a similar figure — grey hair, deep wrinkles, "
+            "wearing a tattered version of the same era-appropriate attire'\n"
+            "- NEVER describe a secondary character in a completely different visual style from the protagonist\n"
         )
     elif subject_mode == 'sparse':
         interval_min = max(1, subject_interval // 60)
@@ -1819,9 +1828,11 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
 
         if character_instructions:
             system_prompt += (
-                f"\n\nCHARACTER-SPECIFIC INSTRUCTIONS:\n"
-                f"The following describes the main character in detail. Use this to inform how you describe "
-                f"them in visual_description fields. These details MUST persist across ALL scenes:\n"
+                f"\n\nCHARACTER-SPECIFIC INSTRUCTIONS (MANDATORY — ENFORCE ALL DETAILS):\n"
+                f"The following describes the main character in detail. You MUST include ALL of these details "
+                f"in EVERY visual_description where has_subject is true. Do NOT selectively apply some details "
+                f"and ignore others — every instruction below (hair style, hair color, attire, accessories, "
+                f"distinguishing features, etc.) MUST be reflected in the scene description:\n"
                 f"{character_instructions}\n"
             )
 
@@ -4039,8 +4050,13 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
             elif image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
-            if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
-                prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {prompt}"
+            if resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
+                if scene_has_subject:
+                    prompt = f"CHARACTER APPEARANCE RULES (MANDATORY — the character's identity comes from the uploaded reference image, but you MUST also enforce ALL of the following details exactly): {resolved_char_instructions}. Every detail listed above (hair style, hair color, attire, accessories, etc.) MUST be visible in the generated image — do not omit any. {prompt}"
+                else:
+                    # Scene without main subject but may have secondary characters —
+                    # anchor their visual style to the subject reference
+                    prompt = f"VISUAL STYLE ANCHOR: Any people or characters in this scene must be rendered in the same artistic style and visual quality as the main character from the reference image. They should look like they belong in the same show/world. {prompt}"
             result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
