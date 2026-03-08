@@ -130,6 +130,18 @@ body { font-family: var(--font-body); background: var(--bg); color: var(--text);
 .summary-value { font-size: 0.85rem; font-weight: 500; }
 .summary-tag-pill { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 4px; }
 
+/* Paste Transcript */
+.paste-transcript-box { margin-bottom: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); overflow: hidden; }
+.paste-transcript-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.9rem; cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); transition: background 0.15s; user-select: none; }
+.paste-transcript-header:hover { background: var(--accent-glow); }
+.paste-transcript-hint { flex: 1; text-align: right; font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
+.paste-chevron { transition: transform 0.2s; margin-left: 0.2rem; flex-shrink: 0; }
+.paste-transcript-box.expanded .paste-chevron { transform: rotate(180deg); }
+.paste-transcript-box.expanded { border-color: var(--accent); }
+.paste-transcript-body { padding: 0 0.9rem 0.7rem; }
+.paste-transcript-status { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
+.paste-transcript-status.has-text { color: var(--success); }
+
 /* Upload Zone */
 .upload-zone { padding: 2.5rem 2rem; text-align: center; cursor: pointer; transition: background 0.2s; background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--radius-lg); }
 .upload-zone:hover { background: var(--accent-glow); border-color: var(--accent); }
