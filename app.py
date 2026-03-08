@@ -3796,7 +3796,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 else:
                     # Scenes 2-3: hyper-realistic plant stills
                     sc['visual_description'] = (
-                        f"Hyper-photorealistic close-up botanical photograph, stunning natural detail, "
+                        f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
                         f"shallow depth of field, natural lighting. {orig}"
                     )
                     logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
