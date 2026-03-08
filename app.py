@@ -3772,23 +3772,30 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             if first_anim and last_anim:
                 logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
 
-        # Botanical: force first content scene to hyper-realistic animated flower
+        # Botanical: force first 3 content scenes to hyper-photorealistic plant imagery
         if format_config.get('base') == 'botanical':
-            first_content = next((s for s in scenes if not s.get('is_title_card')), None)
-            if first_content:
-                first_content['hyper_realistic'] = True
-                first_content['is_video'] = True
-                first_content['has_subject'] = False
-                first_content['botanical_hero_flower'] = True
-                # Replace description with a simple flower close-up referencing the
-                # plant from the original description so it stays on-topic
-                orig = first_content.get('visual_description', '')
-                first_content['visual_description'] = (
-                    f"Extreme close-up of a single beautiful flower in its natural habitat, "
-                    f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
-                    f"Context: {orig}"
-                )
-                logger.info(f"Botanical: scene {first_content.get('scene_number')} → hyper-realistic hero flower + Veo")
+            content_scenes = [s for s in scenes if not s.get('is_title_card')]
+            for idx, sc in enumerate(content_scenes[:3]):
+                sc['hyper_realistic'] = True
+                sc['has_subject'] = False
+                orig = sc.get('visual_description', '')
+                if idx == 0:
+                    # First scene: hero flower + Veo animation
+                    sc['is_video'] = True
+                    sc['botanical_hero_flower'] = True
+                    sc['visual_description'] = (
+                        f"Extreme close-up of a single beautiful flower in its natural habitat, "
+                        f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
+                        f"Context: {orig}"
+                    )
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo")
+                else:
+                    # Scenes 2-3: hyper-realistic plant stills
+                    sc['visual_description'] = (
+                        f"Hyper-photorealistic close-up botanical photograph, stunning natural detail, "
+                        f"shallow depth of field, natural lighting. {orig}"
+                    )
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
         # For subject_mode 'all', Gemini already has strong guidance to include the
         # character in ~80% of scenes.  We no longer force has_subject=True on every
         # scene because scenes that don't naturally feature a person (landscapes,
