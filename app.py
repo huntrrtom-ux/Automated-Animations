@@ -190,6 +190,26 @@ BASE_FORMATS = {
         'scene_detection_temperature': 0.4,
         'max_scene_duration': 8,
     },
+    'botanical-realism': {
+        'base': 'botanical-realism',
+        'label': 'Botanical Realism',
+        'description': 'Plant-focused educational with hyper-realistic imagery, no subject',
+        'intro_duration': 30,
+        'intro_animated': False,
+        'intro_scene_min_duration': 2,
+        'intro_scene_max_duration': 8,
+        'body_scene_min_duration': 2,
+        'body_scene_max_duration': 8,
+        'body_animated': False,
+        'periodic_animation_interval': 0,
+        'periodic_animation_window': 0,
+        'ken_burns_effect': 'none',
+        'ken_burns_scale': 1.03,
+        'subject_mode': 'auto',
+        'subject_interval': 0,
+        'scene_detection_temperature': 0.4,
+        'max_scene_duration': 8,
+    },
     'tv-show-pov': {
         'base': 'tv-show-pov',
         'label': 'TV Show POV',
@@ -905,6 +925,75 @@ def migrate_plants_explainer_channel():
     logger.info("=== PLANTS EXPLAINER MIGRATION COMPLETE ===")
 
 migrate_plants_explainer_channel()
+
+
+def migrate_realism_plants_explainer_channel():
+    """One-time migration: create Realism Plant Explainer channel with botanical-realism format."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_realism_plants_explainer.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== REALISM PLANT EXPLAINER MIGRATION: Creating channel ===")
+
+    # Check if channel already exists by name
+    channel_dir = app.config['CHANNEL_FOLDER']
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                if cfg.get('name') == 'Realism Plant Explainer':
+                    logger.info("  'Realism Plant Explainer' already exists — skipping creation")
+                    with open(flag_path, 'w') as f:
+                        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+                    return
+            except Exception:
+                pass
+
+    channel_id = save_channel(
+        name='Realism Plant Explainer',
+        base_format='botanical-realism',
+        tags='',
+        tag_colors={},
+        scene_instructions=(
+            "This channel covers specific plants in educational segments. "
+            "Each section of the transcript discusses a particular plant — identify it from context "
+            "and ensure every scene in that section depicts ONLY that specific plant. "
+            "Alternate between close-up botanical detail shots and wider scenes showing the plant "
+            "in its natural habitat or garden setting."
+        ),
+        image_instructions=(
+            "Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, "
+            "natural lighting. Every plant must be accurately depicted with correct leaf shapes, "
+            "flower structures, and growth habits. No text, no words, no labels, no captions, "
+            "no writing anywhere in the image."
+        ),
+    )
+
+    ch_dir = os.path.join(app.config['CHANNEL_FOLDER'], channel_id)
+    config_path = os.path.join(ch_dir, 'config.json')
+    with open(config_path, 'r') as f:
+        cfg = json.load(f)
+
+    fmt = cfg['format']
+    fmt['label'] = 'Botanical Realism'
+    fmt['description'] = 'Plant-focused educational with hyper-realistic imagery, no subject'
+    cfg['has_subject'] = False
+    cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+
+    logger.info(f"  Created 'Realism Plant Explainer' as {channel_id} with botanical-realism format, no subject")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("=== REALISM PLANT EXPLAINER MIGRATION COMPLETE ===")
+
+migrate_realism_plants_explainer_channel()
 
 
 def migrate_tv_show_pov_channel():
@@ -1785,8 +1874,9 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 '"has_subject": true, "is_video": false, "topic_title": "Back Pain"}]}\n'
                 "Only the first scene of each topic gets topic_title. All other scenes omit it or set it to empty string.\n"
             )
-        # Botanical format: plant identification + subscribe CTA detection
-        if format_config.get('base') == 'botanical':
+        # Botanical / botanical-realism format: plant identification + subscribe CTA detection
+        fmt_base = format_config.get('base', '')
+        if fmt_base in ('botanical', 'botanical-realism'):
             system_prompt += (
                 "\n\nPLANT IDENTIFICATION (CRITICAL FOR BOTANICAL FORMAT):\n"
                 "This transcript covers specific plants, one at a time or in sections.\n"
@@ -1805,8 +1895,18 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "If the narrator mentions subscribing, liking, hitting the bell, or any call-to-action:\n"
                 "- Do NOT create any subscribe button, CTA graphic, or non-plant imagery.\n"
                 "- Keep the visual_description focused on the SAME plant being discussed.\n"
-                "- Set has_subject: true so the subject character appears smiling alongside the plants.\n"
-                "- The scene should feel warm and inviting while staying fully botanical.\n\n"
+            )
+            if fmt_base == 'botanical':
+                system_prompt += (
+                    "- Set has_subject: true so the subject character appears smiling alongside the plants.\n"
+                    "- The scene should feel warm and inviting while staying fully botanical.\n\n"
+                )
+            else:
+                system_prompt += (
+                    "- Set has_subject: false (this channel has no subject character).\n"
+                    "- Simply continue showing the plant with hyper-realistic photography — ignore the CTA entirely.\n\n"
+                )
+            system_prompt += (
                 "PLANT INTRO SCENES:\n"
                 "When the narrator transitions to a NEW plant (e.g. 'at number 18', 'next up', 'number 5 is', "
                 "or simply starts discussing a different plant), mark the FIRST scene of that new plant with "
@@ -1814,14 +1914,27 @@ def detect_scene_changes(transcript_data, session_id, has_subject=False, format_
                 "This scene MUST have has_subject: false and visual_description must contain ONLY a pure botanical "
                 "close-up of the new plant — absolutely NO text, numbers, labels, rankings, or list positions "
                 "in the description. Even if the narrator says 'at number 18', the image should show ONLY the plant.\n\n"
-                "HYPER-REALISTIC DETAIL SHOTS:\n"
-                "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
-                "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
-                "These should be scenes showing striking botanical detail — leaf texture, flower structure, "
-                "root systems, bark patterns, or seed pods.\n"
-                "Spread them out across the plant's section — do NOT cluster them together.\n"
-                "All other scenes remain without this field.\n"
             )
+            if fmt_base == 'botanical':
+                system_prompt += (
+                    "HYPER-REALISTIC DETAIL SHOTS:\n"
+                    "For each unique plant discussed in the transcript, mark EXACTLY 3 pure plant close-up scenes "
+                    "(has_subject: false) with \"hyper_realistic\": true in the JSON.\n"
+                    "These should be scenes showing striking botanical detail — leaf texture, flower structure, "
+                    "root systems, bark patterns, or seed pods.\n"
+                    "Spread them out across the plant's section — do NOT cluster them together.\n"
+                    "All other scenes remain without this field.\n"
+                )
+            else:
+                system_prompt += (
+                    "HYPER-REALISTIC IMAGERY (ALL SCENES):\n"
+                    "Every single scene in this channel uses hyper-realistic photography style.\n"
+                    "All visual_description entries should describe scenes as hyper-realistic botanical photographs "
+                    "with stunning natural detail, shallow depth of field, and natural lighting.\n"
+                    "Set has_subject: false for ALL scenes — this channel has no subject character.\n"
+                    "Absolutely no text, words, numbers, labels, titles, captions, signs, letters, or writing "
+                    "of any kind anywhere in any image.\n"
+                )
 
         if scene_instructions:
             system_prompt += f"\n\nCHANNEL-SPECIFIC SCENE INSTRUCTIONS:\n{scene_instructions}\n"
@@ -3903,30 +4016,51 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             if first_anim and last_anim:
                 logger.info(f"Animation range: first ends at {first_anim['end_time']:.1f}s, last ends at {last_anim['end_time']:.1f}s")
 
-        # Botanical: force first 3 content scenes to hyper-photorealistic plant imagery
-        if format_config.get('base') == 'botanical':
+        # Botanical / botanical-realism: force first 3 content scenes to hyper-photorealistic plant imagery
+        botanical_base = format_config.get('base', '')
+        if botanical_base in ('botanical', 'botanical-realism'):
             content_scenes = [s for s in scenes if not s.get('is_title_card')]
             for idx, sc in enumerate(content_scenes[:3]):
                 sc['hyper_realistic'] = True
-                sc['has_subject'] = False
                 orig = sc.get('visual_description', '')
-                if idx == 0:
-                    # First scene: hero flower + Veo animation
+                # Strip any text/number references from the description
+                cleaned = re.sub(r'(?i)\b(number|#|no\.?)\s*\d+\b', '', orig)
+                cleaned = re.sub(r'(?i)\bat\s+(number|#|no\.?)\s*\d+\b', '', cleaned)
+                cleaned = re.sub(r'(?i)\b(text|words?|label|caption|title|sign|letter|writing|subtitle|heading)\b', '', cleaned)
+                cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+                no_text_suffix = " Absolutely no text, words, numbers, labels, titles, captions, signs, letters, or writing of any kind anywhere in the image."
+                if idx == 0 and botanical_base == 'botanical':
+                    # First scene (botanical only): subject with the plant, maintaining subject's art style + Veo animation
+                    sc['has_subject'] = True
                     sc['is_video'] = True
                     sc['botanical_hero_flower'] = True
                     sc['visual_description'] = (
-                        f"Extreme close-up of a single beautiful flower in its natural habitat, "
-                        f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
-                        f"Context: {orig}"
+                        f"The subject character beside a beautiful plant in its natural habitat, "
+                        f"interacting with the foliage, soft golden-hour sunlight filtering through leaves. "
+                        f"Realistic natural environment with vivid botanical detail. "
+                        f"Context: {cleaned}{no_text_suffix}"
                     )
-                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo")
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → subject with plant hero + Veo (no text)")
+                elif idx == 0 and botanical_base == 'botanical-realism':
+                    # First scene (botanical-realism): hyper-realistic hero flower + Veo animation, no subject
+                    sc['has_subject'] = False
+                    sc['is_video'] = True
+                    sc['botanical_hero_flower'] = True
+                    sc['visual_description'] = (
+                        f"Extreme close-up hyper-realistic photograph of a single beautiful flower in its natural habitat, "
+                        f"dew-covered petals, soft golden-hour sunlight filtering through leaves, "
+                        f"shallow depth of field, stunning natural detail. "
+                        f"Context: {cleaned}{no_text_suffix}"
+                    )
+                    logger.info(f"Botanical-realism: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo (no text)")
                 else:
-                    # Scenes 2-3: hyper-realistic plant stills
+                    # Scenes 2-3: hyper-realistic plant stills (no subject)
+                    sc['has_subject'] = False
                     sc['visual_description'] = (
                         f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
-                        f"shallow depth of field, natural lighting. {orig}"
+                        f"shallow depth of field, natural lighting. {cleaned}{no_text_suffix}"
                     )
-                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still")
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic plant still (no text)")
 
             # Force plant_intro scenes to hyper-realistic with no text/numbers
             first_3_nums = {sc.get('scene_number') for sc in content_scenes[:3]}
@@ -3944,6 +4078,11 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                         f"shallow depth of field, natural lighting. {cleaned}"
                     )
                     logger.info(f"Botanical: scene {sc.get('scene_number')} → plant intro hyper-realistic (no text)")
+
+            # Botanical-realism: force ALL scenes to no subject
+            if botanical_base == 'botanical-realism':
+                for sc in content_scenes:
+                    sc['has_subject'] = False
 
         # For subject_mode 'all', Gemini already has strong guidance to include the
         # character in ~80% of scenes.  We no longer force has_subject=True on every
@@ -4018,6 +4157,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     # Botanical: stay plant-focused, just add subject smiling
                     scene_has_subject = True
                     logger.info(f"Scene {scene_num}: CTA mention (botanical) — keeping plant imagery with subject")
+                elif fmt_base == 'botanical-realism':
+                    # Botanical-realism: stay plant-focused, no subject, just keep the plant imagery
+                    scene_has_subject = False
+                    logger.info(f"Scene {scene_num}: CTA mention (botanical-realism) — keeping plant imagery, no subject")
                 else:
                     prompt = (
                         "A simple, clean image with a plain white background. "
@@ -4045,9 +4188,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 ]
                 for pattern, replacement in _unsafe:
                     prompt = re.sub(pattern, replacement, prompt, flags=re.IGNORECASE)
-            # Hyper-realistic override for botanical scenes (replaces illustration style)
-            if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
-                prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
+            # Hyper-realistic override for botanical/botanical-realism scenes
+            fmt_base = format_config.get('base', '')
+            if fmt_base == 'botanical-realism' or (scene.get('hyper_realistic') and fmt_base == 'botanical'):
+                prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. No text, no words, no labels, no captions, no writing anywhere in the image. {prompt}"
             elif image_instructions:
                 prompt = f"{image_instructions}. {prompt}"
             if resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
@@ -4113,7 +4257,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
 
                 logger.info(f"Retrying scene {scene_num} with rephrased prompt...")
                 rephrased = rephrase_prompt(scene['visual_description'])
-                if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+                retry_fmt_base = format_config.get('base', '')
+                if retry_fmt_base == 'botanical-realism' or (scene.get('hyper_realistic') and retry_fmt_base == 'botanical'):
                     rephrased = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {rephrased}"
                 elif image_instructions:
                     rephrased = f"{image_instructions}. {rephrased}"
@@ -4191,7 +4336,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     scene_has_subject = scene.get('has_subject', False) and has_subject
                     img_path = os.path.join(work_dir, f'scene_{scene_num:04d}.png')
                     regen_prompt = scene['visual_description']
-                    if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+                    regen_fmt_base = format_config.get('base', '')
+                    if regen_fmt_base == 'botanical-realism' or (scene.get('hyper_realistic') and regen_fmt_base == 'botanical'):
                         regen_prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {regen_prompt}"
                     elif image_instructions:
                         regen_prompt = f"{image_instructions}. {regen_prompt}"
@@ -4780,7 +4926,8 @@ def regenerate_scene():
     character_instructions = state.get('character_instructions', '')
     video_format = state.get('video_format', 'pulse')
     image_instructions = format_config.get('image_instructions', '')
-    if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+    regen_fmt_base = format_config.get('base', '')
+    if regen_fmt_base == 'botanical-realism' or (scene.get('hyper_realistic') and regen_fmt_base == 'botanical'):
         prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
     elif image_instructions:
         prompt = f"{image_instructions}. {prompt}"
@@ -4927,7 +5074,8 @@ def regenerate_batch():
         character_instructions = state.get('character_instructions', '')
         batch_video_format = state.get('video_format', 'pulse')
         batch_image_instructions = format_config.get('image_instructions', '')
-        if scene.get('hyper_realistic') and format_config.get('base') == 'botanical':
+        batch_fmt_base = format_config.get('base', '')
+        if batch_fmt_base == 'botanical-realism' or (scene.get('hyper_realistic') and batch_fmt_base == 'botanical'):
             prompt = f"Hyper-realistic macro photography, extreme botanical detail, shallow depth of field, natural lighting. {prompt}"
         elif batch_image_instructions:
             prompt = f"{batch_image_instructions}. {prompt}"
