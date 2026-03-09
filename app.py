@@ -3908,7 +3908,6 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             content_scenes = [s for s in scenes if not s.get('is_title_card')]
             for idx, sc in enumerate(content_scenes[:3]):
                 sc['hyper_realistic'] = True
-                sc['has_subject'] = False
                 orig = sc.get('visual_description', '')
                 # Strip any text/number references from the description
                 cleaned = re.sub(r'(?i)\b(number|#|no\.?)\s*\d+\b', '', orig)
@@ -3917,17 +3916,20 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
                 no_text_suffix = " Absolutely no text, words, numbers, labels, titles, captions, signs, letters, or writing of any kind anywhere in the image."
                 if idx == 0:
-                    # First scene: hero flower + Veo animation
+                    # First scene: subject with the plant, maintaining subject's art style + Veo animation
+                    sc['has_subject'] = True
                     sc['is_video'] = True
                     sc['botanical_hero_flower'] = True
                     sc['visual_description'] = (
-                        f"Extreme close-up of a single beautiful flower in its natural habitat, "
-                        f"dew-covered petals, soft golden-hour sunlight filtering through leaves. "
+                        f"The subject character beside a beautiful plant in its natural habitat, "
+                        f"interacting with the foliage, soft golden-hour sunlight filtering through leaves. "
+                        f"Realistic natural environment with vivid botanical detail. "
                         f"Context: {cleaned}{no_text_suffix}"
                     )
-                    logger.info(f"Botanical: scene {sc.get('scene_number')} → hyper-realistic hero flower + Veo (no text)")
+                    logger.info(f"Botanical: scene {sc.get('scene_number')} → subject with plant hero + Veo (no text)")
                 else:
-                    # Scenes 2-3: hyper-realistic plant stills
+                    # Scenes 2-3: hyper-realistic plant stills (no subject)
+                    sc['has_subject'] = False
                     sc['visual_description'] = (
                         f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
                         f"shallow depth of field, natural lighting. {cleaned}{no_text_suffix}"
