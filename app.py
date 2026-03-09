@@ -195,7 +195,7 @@ BASE_FORMATS = {
         'label': 'Botanical Realism',
         'description': 'Plant-focused educational with hyper-realistic imagery, no subject',
         'intro_duration': 30,
-        'intro_animated': False,
+        'intro_animated': True,
         'intro_scene_min_duration': 2,
         'intro_scene_max_duration': 8,
         'body_scene_min_duration': 2,
@@ -1345,6 +1345,42 @@ def migrate_disable_zoom_botanical():
     logger.info(f"=== MIGRATION COMPLETE: {patched} botanical channel(s) — zoom disabled ===")
 
 migrate_disable_zoom_botanical()
+
+
+def migrate_botanical_realism_intro_animated():
+    """One-time migration: enable intro animation for botanical-realism channels (hook scenes animated, countdown scenes static)."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_botanical_realism_intro_animated.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== MIGRATION: Enabling intro animation for botanical-realism channels ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+    patched = 0
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'botanical-realism':
+                fmt['intro_animated'] = True
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                patched += 1
+                logger.info(f"  Patched {name}: intro_animated -> True")
+        except Exception as e:
+            logger.error(f"  Failed to patch {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info(f"=== MIGRATION COMPLETE: {patched} botanical-realism channel(s) — intro animation enabled ===")
+
+migrate_botanical_realism_intro_animated()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
@@ -4327,6 +4363,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 scene_motion = (
                     "Gentle breeze softly moving petals, very subtle natural sway. "
                     "Slow, steady camera. Natural outdoor ambient motion only."
+                )
+            elif botanical_base == 'botanical-realism' and scene.get('is_video'):
+                # All animated botanical-realism scenes: natural plant motion
+                scene_motion = (
+                    "Gentle natural motion: leaves swaying softly in breeze, subtle light shifts, "
+                    "delicate petal movement. Slow, steady camera. Calm outdoor ambient motion."
                 )
 
             for anim_attempt in range(max_anim_retries):
