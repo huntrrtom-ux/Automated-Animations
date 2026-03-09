@@ -195,7 +195,7 @@ BASE_FORMATS = {
         'label': 'Botanical Realism',
         'description': 'Plant-focused educational with hyper-realistic imagery, no subject',
         'intro_duration': 30,
-        'intro_animated': False,
+        'intro_animated': True,
         'intro_scene_min_duration': 2,
         'intro_scene_max_duration': 8,
         'body_scene_min_duration': 2,
@@ -1345,6 +1345,42 @@ def migrate_disable_zoom_botanical():
     logger.info(f"=== MIGRATION COMPLETE: {patched} botanical channel(s) — zoom disabled ===")
 
 migrate_disable_zoom_botanical()
+
+
+def migrate_botanical_realism_intro_animated():
+    """One-time migration: enable intro animation for botanical-realism channels (hook scenes animated, countdown scenes static)."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_botanical_realism_intro_animated.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== MIGRATION: Enabling intro animation for botanical-realism channels ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+    patched = 0
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') == 'botanical-realism':
+                fmt['intro_animated'] = True
+                cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+                with open(config_path, 'w') as f:
+                    json.dump(cfg, f, indent=2)
+                patched += 1
+                logger.info(f"  Patched {name}: intro_animated -> True")
+        except Exception as e:
+            logger.error(f"  Failed to patch {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info(f"=== MIGRATION COMPLETE: {patched} botanical-realism channel(s) — intro animation enabled ===")
+
+migrate_botanical_realism_intro_animated()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
@@ -2698,13 +2734,15 @@ def sanitize_style_text(style_text):
 
 
 # ===================== WHISK IMAGE GENERATION =====================
-def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False):
+def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_session=None, scene_has_subject=False, skip_style=False):
     # Route to recipe if this scene will actually have media inputs.
     # A session may have subject_media_id but this scene may not use it
     # (scene_has_subject=False); if there's also no style image, recipe
     # would be called with 0 inputs → Whisk returns 400 INVALID_ARGUMENT.
+    # skip_style=True forces the scene to bypass style image/text entirely
+    # (used for hyper-realistic botanical scenes that must stay photorealistic).
     scene_will_use_subject = scene_has_subject and whisk_session and whisk_session.get('subject_media_id')
-    scene_will_use_style = whisk_session and whisk_session.get('style_media_id')
+    scene_will_use_style = (not skip_style) and whisk_session and whisk_session.get('style_media_id')
     if whisk_session and (scene_will_use_style or scene_will_use_subject):
         current_prompt = prompt
         session_refreshed = False
@@ -2761,7 +2799,9 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         return None
 
     # Text-only style or no style — use basic generateImage with style in prompt
-    style_text = whisk_session.get('style_text', '') if whisk_session else ''
+    # When skip_style is True (hyper-realistic botanical), ignore style_text to
+    # avoid "DO NOT use photorealistic" contradicting the hyper-realistic prompt.
+    style_text = whisk_session.get('style_text', '') if (whisk_session and not skip_style) else ''
     if style_text:
         full_prompt = f"MANDATORY ART STYLE — every element must be rendered in this style: {style_text}. DO NOT use photorealistic or realistic rendering. Scene: {prompt}"
     else:
@@ -4076,6 +4116,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     sc['visual_description'] = (
                         f"Hyper-realistic close-up botanical photograph, stunning natural detail, "
                         f"shallow depth of field, natural lighting. {cleaned}"
+                        f" Absolutely no text, words, numbers, labels, titles, captions, signs, letters, or writing of any kind anywhere in the image."
                     )
                     logger.info(f"Botanical: scene {sc.get('scene_number')} → plant intro hyper-realistic (no text)")
 
@@ -4201,7 +4242,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     # Scene without main subject but may have secondary characters —
                     # anchor their visual style to the subject reference
                     prompt = f"VISUAL STYLE ANCHOR: Any people or characters in this scene must be rendered in the same artistic style and visual quality as the main character from the reference image. They should look like they belong in the same show/world. {prompt}"
-            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+            # Hyper-realistic botanical scenes must bypass style image/text entirely
+            # so IMAGEN produces a photorealistic photo instead of an illustration
+            # with rendered text from the style reference.
+            is_hyper_botanical = scene.get('hyper_realistic') and fmt_base in ('botanical', 'botanical-realism')
+            result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject,
+                                          skip_style=is_hyper_botanical)
             add_credits(1, f'Image generation — scene {scene_num}', session_id)
             return idx, result
 
@@ -4264,8 +4310,10 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     rephrased = f"{image_instructions}. {rephrased}"
                 if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
                     rephrased = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {rephrased}"
-                result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject)
-                
+                retry_hyper_botanical = scene.get('hyper_realistic') and retry_fmt_base in ('botanical', 'botanical-realism')
+                result = generate_image_whisk(rephrased, img_path, session_id, scene_num, whisk_session, scene_has_subject,
+                                              skip_style=retry_hyper_botanical)
+
                 if result == "TOKEN_EXPIRED":
                     whisk_pool.release_key(session_id)
                     emit_progress(session_id, 'error', 0, 'Token expired — update in Railway settings.')
@@ -4316,6 +4364,12 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                     "Gentle breeze softly moving petals, very subtle natural sway. "
                     "Slow, steady camera. Natural outdoor ambient motion only."
                 )
+            elif botanical_base == 'botanical-realism' and scene.get('is_video'):
+                # All animated botanical-realism scenes: natural plant motion
+                scene_motion = (
+                    "Gentle natural motion: leaves swaying softly in breeze, subtle light shifts, "
+                    "delicate petal movement. Slow, steady camera. Calm outdoor ambient motion."
+                )
 
             for anim_attempt in range(max_anim_retries):
                 try:
@@ -4343,7 +4397,9 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                         regen_prompt = f"{image_instructions}. {regen_prompt}"
                     if scene_has_subject and resolved_char_instructions and format_config.get('base') == 'tv-show-pov':
                         regen_prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {resolved_char_instructions}. {regen_prompt}"
-                    new_image = generate_image_whisk(regen_prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+                    regen_hyper_botanical = scene.get('hyper_realistic') and regen_fmt_base in ('botanical', 'botanical-realism')
+                    new_image = generate_image_whisk(regen_prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject,
+                                                     skip_style=regen_hyper_botanical)
                     if new_image in ("TOKEN_EXPIRED", "QUOTA_EXHAUSTED"):
                         return idx, new_image, None
                     if new_image and isinstance(new_image, dict):
@@ -4934,7 +4990,9 @@ def regenerate_scene():
     if scene_has_subject and character_instructions and video_format == 'tv-show-pov':
         prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {character_instructions}. {prompt}"
     socketio.emit('regen_progress', {'session_id': session_id, 'progress': 15, 'message': 'Generating image...'})
-    result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+    regen_hyper_botanical = scene.get('hyper_realistic') and regen_fmt_base in ('botanical', 'botanical-realism')
+    result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject,
+                                  skip_style=regen_hyper_botanical)
 
     if result == "TOKEN_EXPIRED":
         whisk_pool.release_key(session_id)
@@ -5083,7 +5141,9 @@ def regenerate_batch():
             prompt = f"CHARACTER CONTEXT (the character's identity comes from the uploaded reference image — use these notes for additional context only, do NOT replace the character): {character_instructions}. {prompt}"
 
         logger.info(f"Batch regen: generating image for scene {scene_num}")
-        result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject)
+        batch_hyper_botanical = scene.get('hyper_realistic') and batch_fmt_base in ('botanical', 'botanical-realism')
+        result = generate_image_whisk(prompt, img_path, session_id, scene_num, whisk_session, scene_has_subject,
+                                      skip_style=batch_hyper_botanical)
 
         if result == "TOKEN_EXPIRED":
             whisk_pool.release_key(session_id)
