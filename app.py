@@ -816,15 +816,20 @@ def migrate_space_theories_channel():
         name='Space Theories Explained',
         base_format='pulse',
         scene_instructions=(
-            "Include the subject character in approximately 70% of all scenes. "
-            "Leave some scenes as pure environment or space visuals without the subject.\n"
-            "For EVERY scene with the subject, describe their specific movements, facial expressions, "
-            "and hand/body gestures in vivid detail. Never leave the subject static or vaguely described."
+            "This is a sci-fi-style narration with a single persistent character "
+            "who should appear in roughly 80% of scenes — they are the protagonist. "
+            "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
+            "and ensure ALL scenes reflect that era consistently. "
+            "Vary camera angles: wide establishing shots with character visible, medium shots of character "
+            "interacting with the environment, and close-ups of character reactions."
         ),
         image_instructions=(
-            "Graphic, exaggerated, dramatic visual style. Use bold compositions, extreme perspectives, "
-            "vivid lighting, and theatrical staging. Scenes should feel cinematic and larger-than-life."
+            "Dramatic lighting, rich color grading, depth of field. "
+            "The character must be visually consistent across all scenes that he is in "
+            "— same face, same build, same core appearance. "
+            "Attire should match the era and situation depicted in the transcript."
         ),
+        style_text='detailed hand drawn, medium thick lines, earthly tones, background detail',
     )
 
     # Patch format config with Space Theories overrides
@@ -1028,20 +1033,20 @@ def migrate_tv_show_pov_channel():
         tags='',
         tag_colors={},
         scene_instructions=(
-            "This is a sci-fi-style narration with a single persistent character "
+            "This is a TV-show-style narration with a single persistent POV character "
             "who should appear in roughly 80% of scenes — they are the protagonist. "
             "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
             "and ensure ALL scenes reflect that era consistently. "
             "Vary camera angles: wide establishing shots with character visible, medium shots of character "
-            "interacting with the environment, and close-ups of character reactions."
+            "interacting with the environment, close-ups of character reactions, "
+            "and occasionally first-person POV shots showing what the character sees through their eyes "
+            "(e.g. looking down at their own hands, peering through a doorway, gazing across a landscape)."
         ),
         image_instructions=(
-            "Dramatic lighting, rich color grading, depth of field. "
-            "The character must be visually consistent across all scenes that he is in "
-            "— same face, same build, same core appearance. "
-            "Attire should match the era and situation depicted in the transcript."
+            "Cinematic TV-show quality. Dramatic lighting, rich color grading, depth of field. "
+            "The POV character must be visually consistent across all frames — same face, same build, "
+            "same core appearance. Attire should match the era and situation depicted in the transcript."
         ),
-        style_text='detailed hand drawn, medium thick lines, earthly tones, background detail',
         character_instructions='',
     )
 
@@ -1054,13 +1059,12 @@ def migrate_tv_show_pov_channel():
     fmt = cfg['format']
     fmt['label'] = 'TV Show POV'
     fmt['description'] = 'PIL frame-by-frame with persistent POV character'
-    fmt['animation_pattern'] = 'alternating'
     cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
 
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
 
-    logger.info(f"  Created 'TV Show POV' as {channel_id} with tv-show-pov format, alternating animation")
+    logger.info(f"  Created 'TV Show POV' as {channel_id} with tv-show-pov format")
 
     with open(flag_path, 'w') as f:
         f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -1384,14 +1388,14 @@ def migrate_botanical_realism_intro_animated():
 migrate_botanical_realism_intro_animated()
 
 
-def migrate_tvshow_pov_scifi_style():
-    """One-time migration: update TV Show POV channels with sci-fi scene/image instructions,
-    hand-drawn style text, and alternating animation pattern."""
-    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_tvshow_pov_scifi_style.done')
+def migrate_space_theories_scifi_style():
+    """One-time migration: update Space Theories Explained channels with sci-fi scene/image
+    instructions, hand-drawn style text, and keep alternating animation pattern."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_space_theories_scifi_style.done')
     if os.path.exists(flag_path):
         return
 
-    logger.info("=== MIGRATION: Updating TV Show POV channels with sci-fi style ===")
+    logger.info("=== MIGRATION: Updating Space Theories channels with sci-fi style ===")
     channel_dir = app.config['CHANNEL_FOLDER']
     patched = 0
     for name in os.listdir(channel_dir):
@@ -1403,8 +1407,7 @@ def migrate_tvshow_pov_scifi_style():
         try:
             with open(config_path, 'r') as f:
                 cfg = json.load(f)
-            fmt = cfg.get('format', {})
-            if fmt.get('base') != 'tv-show-pov':
+            if cfg.get('name') != 'Space Theories Explained':
                 continue
 
             cfg['scene_instructions'] = (
@@ -1422,20 +1425,19 @@ def migrate_tvshow_pov_scifi_style():
                 "Attire should match the era and situation depicted in the transcript."
             )
             cfg['style_text'] = 'detailed hand drawn, medium thick lines, earthly tones, background detail'
-            fmt['animation_pattern'] = 'alternating'
             cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
             with open(config_path, 'w') as f:
                 json.dump(cfg, f, indent=2)
             patched += 1
-            logger.info(f"  Patched {name}: sci-fi instructions, hand-drawn style, alternating animation")
+            logger.info(f"  Patched {name}: sci-fi instructions, hand-drawn style")
         except Exception as e:
             logger.error(f"  Failed to patch {name}: {e}")
 
     with open(flag_path, 'w') as f:
         f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
-    logger.info(f"=== MIGRATION COMPLETE: {patched} tv-show-pov channel(s) updated with sci-fi style ===")
+    logger.info(f"=== MIGRATION COMPLETE: {patched} Space Theories channel(s) updated with sci-fi style ===")
 
-migrate_tvshow_pov_scifi_style()
+migrate_space_theories_scifi_style()
 
 
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
