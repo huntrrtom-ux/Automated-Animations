@@ -1440,6 +1440,64 @@ def migrate_space_theories_scifi_style():
 migrate_space_theories_scifi_style()
 
 
+def migrate_revert_tvshow_pov_instructions():
+    """One-time migration: restore TV Show POV channels to their original instructions
+    after they were incorrectly overwritten by migrate_tvshow_pov_scifi_style."""
+    flag_path = os.path.join(app.config['CHANNEL_FOLDER'], '_migration_revert_tvshow_pov_instructions.done')
+    if os.path.exists(flag_path):
+        return
+
+    logger.info("=== MIGRATION: Restoring TV Show POV channels to original instructions ===")
+    channel_dir = app.config['CHANNEL_FOLDER']
+    patched = 0
+    for name in os.listdir(channel_dir):
+        if not name.startswith('ch_'):
+            continue
+        config_path = os.path.join(channel_dir, name, 'config.json')
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+            fmt = cfg.get('format', {})
+            if fmt.get('base') != 'tv-show-pov':
+                continue
+
+            cfg['scene_instructions'] = (
+                "This is a TV-show-style narration with a single persistent POV character "
+                "who should appear in roughly 80% of scenes — they are the protagonist. "
+                "Detect the time period and setting from the transcript (medieval, modern, sci-fi, etc.) "
+                "and ensure ALL scenes reflect that era consistently. "
+                "Vary camera angles: wide establishing shots with character visible, medium shots of character "
+                "interacting with the environment, close-ups of character reactions, "
+                "and occasionally first-person POV shots showing what the character sees through their eyes "
+                "(e.g. looking down at their own hands, peering through a doorway, gazing across a landscape)."
+            )
+            cfg['image_instructions'] = (
+                "Cinematic TV-show quality. Dramatic lighting, rich color grading, depth of field. "
+                "The POV character must be visually consistent across all frames — same face, same build, "
+                "same core appearance. Attire should match the era and situation depicted in the transcript."
+            )
+            # Remove style_text and animation_pattern that were incorrectly added
+            if cfg.get('style_text') == 'detailed hand drawn, medium thick lines, earthly tones, background detail':
+                cfg['style_text'] = ''
+            if fmt.get('animation_pattern') == 'alternating':
+                del fmt['animation_pattern']
+            cfg['updated_at'] = time.strftime('%Y-%m-%d %H:%M')
+            with open(config_path, 'w') as f:
+                json.dump(cfg, f, indent=2)
+            patched += 1
+            logger.info(f"  Restored {name}: original TV Show POV instructions")
+        except Exception as e:
+            logger.error(f"  Failed to patch {name}: {e}")
+
+    with open(flag_path, 'w') as f:
+        f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info(f"=== MIGRATION COMPLETE: {patched} TV Show POV channel(s) restored to original instructions ===")
+
+migrate_revert_tvshow_pov_instructions()
+
+
 # ===================== BACKWARD COMPAT: Preset wrappers =====================
 def get_preset(preset_id):
     """Backward-compatible: loads a channel, falling back to old preset dir."""
