@@ -86,6 +86,8 @@ def check_cancelled(session_id):
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
+from assemblyai_pool import AssemblyAIPool
+assemblyai_pool = AssemblyAIPool()
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'webm', 'mp4'}
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
@@ -1534,7 +1536,8 @@ def get_audio_duration(filepath):
 
 def transcribe_audio_assemblyai(filepath, session_id):
     """Transcribe audio using AssemblyAI for more accurate timestamps."""
-    aai_headers = {"authorization": ASSEMBLYAI_API_KEY}
+    api_key = assemblyai_pool.reserve_key(session_id) or ASSEMBLYAI_API_KEY
+    aai_headers = {"authorization": api_key}
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
     # Upload file using requests (gevent-safe) instead of assemblyai SDK (uses httpx, not gevent-safe)
@@ -3803,7 +3806,7 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
             emit_progress(session_id, 'transcription', 15, f'Pasted transcript: {len(segments)} segments')
             logger.info(f"[{session_id}] User transcript: {len(segments)} segments, {len(words)} words")
         else:
-            if not ASSEMBLYAI_API_KEY:
+            if not assemblyai_pool.has_keys() and not ASSEMBLYAI_API_KEY:
                 error_msg = "ASSEMBLYAI_API_KEY environment variable is required for transcription"
                 logger.error(error_msg)
                 emit_progress(session_id, 'error', 0, error_msg)
@@ -3816,6 +3819,8 @@ def process_voiceover(filepath, session_id, channel_id=None, project_title='', d
                 logger.error(error_msg)
                 emit_progress(session_id, 'error', 0, error_msg)
                 return {'error': error_msg}
+            finally:
+                assemblyai_pool.release_key(session_id)
         check_cancelled(session_id)
 
         # Resolve character instructions: per-video override > channel default
@@ -5576,7 +5581,8 @@ def version():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'openai': bool(OPENAI_API_KEY), 'gemini': bool(GEMINI_API_KEY),
-                    'assemblyai': bool(ASSEMBLYAI_API_KEY),
+                    'assemblyai': assemblyai_pool.has_keys() or bool(ASSEMBLYAI_API_KEY),
+                    'assemblyai_keys': len(assemblyai_pool), 'assemblyai_pool': assemblyai_pool.status(),
                     'whisk_keys': len(whisk_pool), 'whisk_pool': whisk_pool.status()})
 
 if __name__ == '__main__':
