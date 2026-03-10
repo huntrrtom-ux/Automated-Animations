@@ -1,8 +1,9 @@
 """
-AssemblyAI Pool - Round-robin multi-key support for concurrent transcriptions.
+AssemblyAI Pool - Queued multi-key support for concurrent transcriptions.
 
-Distributes transcription jobs across multiple API keys so concurrent
-generations don't bottleneck on a single account's rate/concurrency limits.
+Each key handles at most ONE transcription at a time. When all keys are busy,
+new requests queue and wait until a key becomes free — preventing AssemblyAI
+from throttling/stalling when multiple jobs hit the same account concurrently.
 
 RAILWAY ENV VARS:
   Single key (current - still works):
@@ -21,12 +22,13 @@ import os
 import time
 import threading
 import logging
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
 
 class AssemblyAIPool:
-    """Thread-safe round-robin pool of AssemblyAI API keys."""
+    """Thread-safe pool of AssemblyAI API keys with 1-job-per-key queuing."""
 
     def __init__(self):
         self.keys = []  # list of {'key': str, 'cooldown_until': float}
@@ -34,6 +36,9 @@ class AssemblyAIPool:
         self._lock = threading.Lock()
         self._reservations = {}       # session_id -> key_index
         self._reservation_counts = {} # key_index -> count of active reservations
+        self._key_available = threading.Condition(self._lock)
+        self._queue = deque()         # ordered queue of waiting session_ids
+        self._queue_set = set()       # fast lookup for queue membership
         self._load_keys()
         logger.info(f"AssemblyAIPool initialized with {len(self.keys)} key(s)")
 
@@ -60,9 +65,24 @@ class AssemblyAIPool:
             if k:
                 self.keys.append({'key': k, 'cooldown_until': 0})
 
-    def reserve_key(self, session_id):
-        """Reserve a key for a transcription session. Picks the key with fewest
-        active reservations for load balancing. Returns key string or None."""
+    def _find_free_key(self):
+        """Find a key with 0 active reservations (not on cooldown). Returns index or None.
+        Must be called with self._lock held."""
+        now = time.time()
+        best_idx = None
+        for idx, entry in enumerate(self.keys):
+            count = self._reservation_counts.get(idx, 0)
+            if count == 0 and entry['cooldown_until'] <= now:
+                best_idx = idx
+                break  # first free key wins
+        return best_idx
+
+    def reserve_key(self, session_id, emit_fn=None):
+        """Reserve a key for a transcription session. Only 1 job per key.
+        If all keys are busy, blocks until one is free (FIFO queue).
+
+        emit_fn: optional callable(position, total_queued) for queue status updates.
+        Returns key string or None if no keys configured."""
         with self._lock:
             if not self.keys:
                 return None
@@ -72,42 +92,85 @@ class AssemblyAIPool:
                 idx = self._reservations[session_id]
                 return self.keys[idx]['key']
 
-            now = time.time()
+            # Try to grab a free key immediately
+            free_idx = self._find_free_key()
+            if free_idx is not None:
+                self._reservations[session_id] = free_idx
+                self._reservation_counts[free_idx] = 1
+                logger.info(f"AssemblyAI: reserved key {free_idx+1}/{len(self.keys)} for session {session_id} (immediate)")
+                return self.keys[free_idx]['key']
 
-            # Find available key with fewest reservations
-            best_idx = None
-            best_count = float('inf')
-            for idx, entry in enumerate(self.keys):
-                if entry['cooldown_until'] > now:
-                    continue
-                count = self._reservation_counts.get(idx, 0)
-                if count < best_count:
-                    best_count = count
-                    best_idx = idx
+            # All keys busy — join the queue
+            self._queue.append(session_id)
+            self._queue_set.add(session_id)
+            queue_pos = len(self._queue)
+            logger.info(f"AssemblyAI: session {session_id} queued at position {queue_pos} (all {len(self.keys)} keys busy)")
 
-            # If all cooling down, pick fewest reservations
-            if best_idx is None:
-                best_idx = min(range(len(self.keys)),
-                               key=lambda i: (self._reservation_counts.get(i, 0),
-                                              self.keys[i]['cooldown_until']))
+            if emit_fn:
+                try:
+                    emit_fn(queue_pos, len(self._queue))
+                except Exception:
+                    pass
 
-            self._reservations[session_id] = best_idx
-            self._reservation_counts[best_idx] = self._reservation_counts.get(best_idx, 0) + 1
-            logger.info(f"AssemblyAI: reserved key {best_idx+1}/{len(self.keys)} for session {session_id} "
-                        f"(active: {self._reservation_counts[best_idx]})")
-            return self.keys[best_idx]['key']
+            # Wait until this session is at the front of the queue AND a key is free
+            while True:
+                self._key_available.wait(timeout=10)
+
+                # Check if session was removed from queue externally (e.g., cancel)
+                if session_id not in self._queue_set:
+                    # Session was cancelled while queued
+                    return None
+
+                # Only the front of the queue gets to try
+                if self._queue and self._queue[0] == session_id:
+                    free_idx = self._find_free_key()
+                    if free_idx is not None:
+                        self._queue.popleft()
+                        self._queue_set.discard(session_id)
+                        self._reservations[session_id] = free_idx
+                        self._reservation_counts[free_idx] = 1
+                        logger.info(f"AssemblyAI: reserved key {free_idx+1}/{len(self.keys)} for session {session_id} (from queue)")
+                        return self.keys[free_idx]['key']
+
+                # Update queue position for status display
+                if emit_fn:
+                    try:
+                        pos = list(self._queue).index(session_id) + 1
+                        emit_fn(pos, len(self._queue))
+                    except (ValueError, Exception):
+                        pass
 
     def release_key(self, session_id):
-        """Release a session's key reservation."""
+        """Release a session's key reservation and wake queued waiters."""
         with self._lock:
+            # Remove from queue if still waiting (e.g., cancelled before reservation)
+            if session_id in self._queue_set:
+                self._queue_set.discard(session_id)
+                try:
+                    self._queue.remove(session_id)
+                except ValueError:
+                    pass
+                logger.info(f"AssemblyAI: removed session {session_id} from queue")
+
             if session_id in self._reservations:
                 idx = self._reservations.pop(session_id)
-                count = self._reservation_counts.get(idx, 1)
-                if count <= 1:
-                    self._reservation_counts.pop(idx, None)
-                else:
-                    self._reservation_counts[idx] = count - 1
+                self._reservation_counts.pop(idx, None)
                 logger.info(f"AssemblyAI: released key {idx+1}/{len(self.keys)} for session {session_id}")
+                # Wake up queued waiters so the next in line can grab this key
+                self._key_available.notify_all()
+
+    def cancel_queued(self, session_id):
+        """Remove a session from the queue without releasing a key."""
+        with self._lock:
+            if session_id in self._queue_set:
+                self._queue_set.discard(session_id)
+                try:
+                    self._queue.remove(session_id)
+                except ValueError:
+                    pass
+                logger.info(f"AssemblyAI: cancelled queued session {session_id}")
+                # Wake waiters so they can re-check their position
+                self._key_available.notify_all()
 
     def mark_cooldown(self, session_id, seconds=120):
         """Mark the key used by a session as rate-limited."""
@@ -124,13 +187,23 @@ class AssemblyAIPool:
     def __len__(self):
         return len(self.keys)
 
+    def queue_length(self):
+        """Return the number of sessions waiting in queue."""
+        with self._lock:
+            return len(self._queue)
+
     def status(self):
         """Return pool status for health/admin endpoints."""
         now = time.time()
-        return {
-            'total_keys': len(self.keys),
-            'available': sum(1 for k in self.keys if k['cooldown_until'] <= now),
-            'cooling_down': sum(1 for k in self.keys if k['cooldown_until'] > now),
-            'active_reservations': dict(self._reservation_counts),
-            'reserved_sessions': list(self._reservations.keys()),
-        }
+        with self._lock:
+            return {
+                'total_keys': len(self.keys),
+                'available': sum(1 for idx in range(len(self.keys))
+                                 if self._reservation_counts.get(idx, 0) == 0
+                                 and self.keys[idx]['cooldown_until'] <= now),
+                'cooling_down': sum(1 for k in self.keys if k['cooldown_until'] > now),
+                'active_reservations': dict(self._reservation_counts),
+                'reserved_sessions': list(self._reservations.keys()),
+                'queued_sessions': list(self._queue),
+                'queue_length': len(self._queue),
+            }

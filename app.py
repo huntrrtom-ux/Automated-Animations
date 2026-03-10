@@ -1536,7 +1536,18 @@ def get_audio_duration(filepath):
 
 def transcribe_audio_assemblyai(filepath, session_id):
     """Transcribe audio using AssemblyAI for more accurate timestamps."""
-    api_key = assemblyai_pool.reserve_key(session_id) or ASSEMBLYAI_API_KEY
+
+    def _queue_status(position, total):
+        emit_progress(session_id, 'transcription', 1,
+                      f'Queued for transcription (position {position} of {total})...')
+
+    emit_progress(session_id, 'transcription', 1, 'Waiting for available AssemblyAI key...')
+    api_key = assemblyai_pool.reserve_key(session_id, emit_fn=_queue_status)
+    if not api_key:
+        # Cancelled while queued, or no keys configured — fall back to legacy key
+        if is_cancelled(session_id):
+            raise GenerationCancelled(f"Generation {session_id} cancelled while queued")
+        api_key = ASSEMBLYAI_API_KEY
     aai_headers = {"authorization": api_key}
     emit_progress(session_id, 'transcription', 2, 'Uploading to AssemblyAI...')
 
@@ -5018,6 +5029,8 @@ def cancel_generation():
         if session_id not in active_sessions:
             return jsonify({'error': 'Session not found or already finished'}), 404
     request_cancel(session_id)
+    # Remove from AssemblyAI queue if waiting for a key
+    assemblyai_pool.cancel_queued(session_id)
     logger.info(f"[{session_id}] Cancellation requested by user")
     return jsonify({'ok': True, 'message': 'Cancellation requested'})
 
