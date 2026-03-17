@@ -2545,53 +2545,84 @@ def whisk_cookie_headers():
 
 # ===================== WHISK CAPTION & UPLOAD =====================
 def caption_image_whisk(image_base64, media_category, workflow_id, session_ts, key=None):
-    headers = whisk_cookie_headers_for(key) if key else whisk_cookie_headers()
     if not image_base64.startswith('data:'):
         image_base64 = f"data:image/png;base64,{image_base64}"
     payload = {"json": {"captionInput": {"candidatesCount": 1, "mediaInput": {"mediaCategory": media_category}},
                "mediaInput": {"mediaCategory": media_category, "rawBytes": image_base64},
                "clientContext": {"sessionId": session_ts, "workflowId": workflow_id}}}
-    try:
-        response = req.post("https://labs.google/fx/api/trpc/backbone.captionImage", json=payload, headers=headers, timeout=60)
-        if response.status_code == 200:
-            result = response.json()
-            try:
-                candidates = result["result"]["data"]["json"]["result"]["candidates"]
-                if candidates:
-                    return candidates[0].get("output", "")
-            except (KeyError, IndexError):
-                pass
-        else:
-            logger.error(f"Caption failed: {response.status_code}")
-    except Exception as e:
-        logger.error(f"Caption error: {e}")
-    return ""
+
+    current_key = key
+    for attempt in range(3):
+        headers = whisk_cookie_headers_for(current_key) if current_key else whisk_cookie_headers()
+        try:
+            response = req.post("https://labs.google/fx/api/trpc/backbone.captionImage", json=payload, headers=headers, timeout=60)
+            if response.status_code == 200:
+                result = response.json()
+                try:
+                    candidates = result["result"]["data"]["json"]["result"]["candidates"]
+                    if candidates:
+                        return candidates[0].get("output", ""), current_key
+                except (KeyError, IndexError):
+                    pass
+                return "", current_key
+            elif response.status_code == 401:
+                if current_key:
+                    whisk_pool.mark_expired(current_key['index'])
+                    logger.warning(f"Caption 401 ({media_category}, key {current_key['index']+1}) — trying next key")
+                    next_key = whisk_pool.get_next()
+                    if next_key and next_key['index'] != current_key['index']:
+                        if next_key.get('wait_seconds', 0) > 0:
+                            time.sleep(min(next_key['wait_seconds'], 15))
+                        current_key = next_key
+                        continue
+                logger.error(f"Caption 401: all keys expired")
+                return "", current_key
+            else:
+                logger.error(f"Caption failed: {response.status_code}")
+                return "", current_key
+        except Exception as e:
+            logger.error(f"Caption error: {e}")
+            return "", current_key
+    return "", current_key
 
 def upload_image_to_whisk(image_base64, media_category, caption, workflow_id, session_ts, key=None):
-    headers = whisk_cookie_headers_for(key) if key else whisk_cookie_headers()
     if not image_base64.startswith('data:'):
         image_base64 = f"data:image/png;base64,{image_base64}"
     payload = {"json": {"clientContext": {"workflowId": workflow_id, "sessionId": session_ts},
                "uploadMediaInput": {"mediaCategory": media_category, "caption": caption, "rawBytes": image_base64}}}
-    try:
-        response = req.post("https://labs.google/fx/api/trpc/backbone.uploadImage", json=payload, headers=headers, timeout=120)
-        logger.info(f"Upload response ({media_category}): status={response.status_code}")
-        if response.status_code == 401:
-            return "TOKEN_EXPIRED"
-        if response.status_code != 200:
-            logger.error(f"Upload failed ({media_category}): {response.status_code}")
-            return None
-        result = response.json()
+
+    current_key = key
+    for attempt in range(3):
+        headers = whisk_cookie_headers_for(current_key) if current_key else whisk_cookie_headers()
         try:
-            gen_id = result["result"]["data"]["json"]["result"]["uploadMediaGenerationId"]
-            logger.info(f"Got mediaGenerationId for {media_category}: {gen_id[:60]}...")
-            return gen_id
-        except (KeyError, TypeError) as e:
-            logger.error(f"Could not extract mediaGenerationId: {e}")
+            response = req.post("https://labs.google/fx/api/trpc/backbone.uploadImage", json=payload, headers=headers, timeout=120)
+            logger.info(f"Upload response ({media_category}): status={response.status_code} (attempt {attempt+1}/3, key {current_key['index']+1 if current_key else '?'})")
+            if response.status_code == 401:
+                if current_key:
+                    whisk_pool.mark_expired(current_key['index'])
+                    logger.warning(f"Upload 401 for {media_category} (key {current_key['index']+1}) — trying next key")
+                    next_key = whisk_pool.get_next()
+                    if next_key and next_key['index'] != current_key['index']:
+                        if next_key.get('wait_seconds', 0) > 0:
+                            time.sleep(min(next_key['wait_seconds'], 15))
+                        current_key = next_key
+                        continue
+                return "TOKEN_EXPIRED"
+            if response.status_code != 200:
+                logger.error(f"Upload failed ({media_category}): {response.status_code}")
+                return None
+            result = response.json()
+            try:
+                gen_id = result["result"]["data"]["json"]["result"]["uploadMediaGenerationId"]
+                logger.info(f"Got mediaGenerationId for {media_category}: {gen_id[:60]}...")
+                return gen_id, current_key
+            except (KeyError, TypeError) as e:
+                logger.error(f"Could not extract mediaGenerationId: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Upload exception: {e}")
             return None
-    except Exception as e:
-        logger.error(f"Upload exception: {e}")
-        return None
+    return "TOKEN_EXPIRED"
 
 
 def upload_preset_images_to_whisk(preset_config, session_id):
@@ -2627,7 +2658,8 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
     if preset_config.get('style_base64'):
         emit_progress(session_id, 'generation', 26, 'Captioning style image...')
-        auto_caption = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
+        caption_result = caption_image_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", workflow_id, session_ts, key=pinned_key)
+        auto_caption, pinned_key = caption_result
         style_caption = (
             "ART STYLE REFERENCE ONLY. Extract ONLY the visual rendering style from this image: "
             "line weight, outline thickness, color palette, shading technique, and rendering aesthetic. "
@@ -2643,9 +2675,18 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         result['style_caption'] = style_caption
 
         emit_progress(session_id, 'generation', 28, 'Uploading style reference...')
-        style_id = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", style_caption, workflow_id, session_ts, key=pinned_key)
-        if style_id == "TOKEN_EXPIRED":
+        upload_result = upload_image_to_whisk(preset_config['style_base64'], "MEDIA_CATEGORY_STYLE", style_caption, workflow_id, session_ts, key=pinned_key)
+        if upload_result == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
+        if isinstance(upload_result, tuple):
+            style_id, pinned_key = upload_result
+        else:
+            style_id = upload_result
+        # Update reservation if key rotated during upload
+        if pinned_key and pinned_key['index'] != result.get('_pinned_key_index'):
+            whisk_pool.reassign_key(session_id, pinned_key['index'])
+            result['_pinned_key_index'] = pinned_key['index']
+            logger.info(f"[{session_id}] Key rotated during upload — now using key {pinned_key['index']+1}")
         result['style_media_id'] = style_id
     elif style_text:
         # Text-only style — no image upload needed, style applied via userInstruction
@@ -2653,7 +2694,8 @@ def upload_preset_images_to_whisk(preset_config, session_id):
 
     if preset_config.get('subject_base64'):
         emit_progress(session_id, 'generation', 29, 'Captioning subject...')
-        auto_caption = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
+        caption_result = caption_image_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", workflow_id, session_ts, key=pinned_key)
+        auto_caption, pinned_key = caption_result
         subject_caption = (
             "CHARACTER IDENTITY REFERENCE ONLY. Use this character's face, body type, hair, and clothing "
             "as identity reference. Draw the character with varied poses, expressions, and gestures to match "
@@ -2667,9 +2709,18 @@ def upload_preset_images_to_whisk(preset_config, session_id):
         result['subject_caption'] = subject_caption
 
         emit_progress(session_id, 'generation', 29, 'Uploading subject character...')
-        subject_id = upload_image_to_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", subject_caption, workflow_id, session_ts, key=pinned_key)
-        if subject_id == "TOKEN_EXPIRED":
+        upload_result = upload_image_to_whisk(preset_config['subject_base64'], "MEDIA_CATEGORY_SUBJECT", subject_caption, workflow_id, session_ts, key=pinned_key)
+        if upload_result == "TOKEN_EXPIRED":
             return "TOKEN_EXPIRED"
+        if isinstance(upload_result, tuple):
+            subject_id, pinned_key = upload_result
+        else:
+            subject_id = upload_result
+        # Update reservation if key rotated during subject upload
+        if pinned_key and pinned_key['index'] != result.get('_pinned_key_index'):
+            whisk_pool.reassign_key(session_id, pinned_key['index'])
+            result['_pinned_key_index'] = pinned_key['index']
+            logger.info(f"[{session_id}] Key rotated during subject upload — now using key {pinned_key['index']+1}")
         result['subject_media_id'] = subject_id
 
     return result
@@ -2956,8 +3007,28 @@ def generate_image_whisk(prompt, output_path, session_id, scene_num, whisk_sessi
         create_placeholder_image(prompt, output_path)
         return None
     if response.status_code == 401:
-        return "TOKEN_EXPIRED"
-    if response.status_code != 200:
+        whisk_pool.mark_expired(key['index'])
+        logger.warning(f"generateImage 401 for scene {scene_num} (key {key['index']+1}) — trying next key")
+        next_key = whisk_pool.get_unreserved_key(session_id)
+        if next_key and next_key['index'] != key['index']:
+            if next_key.get('wait_seconds', 0) > 0:
+                time.sleep(min(next_key['wait_seconds'], 15))
+            headers = whisk_bearer_headers_for(next_key)
+            try:
+                response = req.post("https://aisandbox-pa.googleapis.com/v1/whisk:generateImage", json=json_data, headers=headers, timeout=120)
+            except (ConnectionError, Exception) as e:
+                logger.warning(f"Whisk generateImage retry connection error for scene {scene_num}: {e}")
+                create_placeholder_image(prompt, output_path)
+                return None
+            if response.status_code == 401:
+                whisk_pool.mark_expired(next_key['index'])
+                return "TOKEN_EXPIRED"
+            if response.status_code != 200:
+                create_placeholder_image(prompt, output_path)
+                return None
+        else:
+            return "TOKEN_EXPIRED"
+    elif response.status_code != 200:
         create_placeholder_image(prompt, output_path)
         return None
     result = response.json()

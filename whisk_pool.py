@@ -264,6 +264,25 @@ class WhiskPool:
             # No unreserved key available — caller should wait on its own
             return None
 
+    def reassign_key(self, session_id, new_index):
+        """Reassign a session's reservation to a different key index.
+        Used when a key rotates during upload due to 401."""
+        with self._lock:
+            if session_id in self._reservations:
+                old_idx = self._reservations[session_id]
+                if old_idx == new_index:
+                    return
+                # Decrement old key's reservation count
+                count = self._reservation_counts.get(old_idx, 1)
+                if count <= 1:
+                    self._reservation_counts.pop(old_idx, None)
+                else:
+                    self._reservation_counts[old_idx] = count - 1
+            # Assign to new key
+            self._reservations[session_id] = new_index
+            self._reservation_counts[new_index] = self._reservation_counts.get(new_index, 0) + 1
+            logger.info(f"Reassigned session {session_id} to key {new_index+1}/{len(self.keys)}")
+
     def release_key(self, session_id):
         """Release a session's key reservation."""
         with self._lock:
